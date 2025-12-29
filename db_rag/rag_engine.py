@@ -125,10 +125,15 @@ SQL Query:"""
             
             # Remove markdown code blocks if present
             if sql_query.startswith("```"):
-                sql_query = sql_query.split("```")[1]
-                if sql_query.startswith("sql"):
-                    sql_query = sql_query[3:]
-                sql_query = sql_query.strip()
+                parts = sql_query.split("```")
+                if len(parts) >= 2:
+                    sql_query = parts[1]
+                    if sql_query.startswith("sql"):
+                        sql_query = sql_query[3:]
+                    sql_query = sql_query.strip()
+                else:
+                    # If split didn't work as expected, just remove the backticks
+                    sql_query = sql_query.replace("```", "").strip()
             
             logger.info(f"Generated SQL: {sql_query}")
             

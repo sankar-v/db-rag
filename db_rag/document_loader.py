@@ -139,7 +139,10 @@ class DocumentLoader:
         try:
             # Get all files matching the pattern
             path = Path(directory_path)
-            files = path.glob(glob_pattern) if recursive else path.glob(glob_pattern.replace("**/", ""))
+            if recursive:
+                files = path.rglob(glob_pattern.replace("**/", ""))
+            else:
+                files = path.glob(glob_pattern.replace("**/", ""))
             
             for file_path in files:
                 if file_path.is_file():
