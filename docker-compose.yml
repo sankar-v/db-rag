@@ -1,0 +1,54 @@
+services:
+  postgres:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+    container_name: db-rag-postgres
+    environment:
+      POSTGRES_DB: pagila
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - db-rag-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pagila"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Application service (optional - for running the app in Docker)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: db-rag-app
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5433
+      DB_NAME: pagila
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - db-rag-network
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: tail -f /dev/null  # Keep container running
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  db-rag-network:
+    driver: bridge
