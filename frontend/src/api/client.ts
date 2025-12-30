@@ -103,11 +103,42 @@ export const tableAPI = {
 }
 
 export const connectionAPI = {
-  test: async (config: any): Promise<{ success: boolean; message: string; tables_count?: number }> => {
-    const response = await api.post('/api/connection/test', config)
+  list: async (): Promise<any[]> => {
+    const response = await api.get('/api/connections')
+    return response.data.connections
+  },
+
+  test: async (config: any): Promise<{ success: boolean; message?: string; error?: string; tables?: string[] }> => {
+    const response = await api.post('/api/connections/test', config)
     return response.data
   },
 
+  save: async (config: any): Promise<{ success: boolean; connection_id: string; message: string }> => {
+    const response = await api.post('/api/connections', config)
+    return response.data
+  },
+
+  update: async (id: string, config: any): Promise<{ success: boolean; message: string }> => {
+    const response = await api.put(`/api/connections/${id}`, config)
+    return response.data
+  },
+
+  delete: async (id: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/api/connections/${id}`)
+    return response.data
+  },
+
+  setActive: async (id: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post(`/api/connections/${id}/activate`)
+    return response.data
+  },
+
+  syncTables: async (connectionId: string, tables: string[]): Promise<{ success: boolean; tables_synced: number }> => {
+    const response = await api.post(`/api/connections/${connectionId}/sync`, { tables })
+    return response.data
+  },
+
+  // Legacy methods for backwards compatibility
   configure: async (config: any): Promise<{ success: boolean; message: string }> => {
     const response = await api.post('/api/connection/configure', config)
     return response.data

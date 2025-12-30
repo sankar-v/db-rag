@@ -13,6 +13,8 @@ import json
 
 from main import DBRAG
 from config import Config
+from connection_manager import ConnectionManager
+from database import DatabaseManager
 
 # Load environment
 load_dotenv()
@@ -40,8 +42,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global DB-RAG instance
+# Global DB-RAG instance and connection manager
 rag_instance: Optional[DBRAG] = None
+connection_manager = ConnectionManager()
 
 
 # Pydantic models
@@ -481,6 +484,230 @@ async def configure_connection(request: ConnectionRequest):
         }
     except Exception as e:
         logger.error(f"Failed to configure connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# NEW CONNECTION MANAGEMENT ENDPOINTS
+# ============================================================================
+
+class ConnectionCreateRequest(BaseModel):
+    name: str
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    schema: str = "public"
+    tables: Optional[List[str]] = None
+
+
+@app.get("/api/connections")
+async def list_connections():
+    """List all saved connections"""
+    try:
+        connections = connection_manager.list_connections()
+        return {"success": True, "connections": connections}
+    except Exception as e:
+        logger.error(f"Failed to list connections: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/connections/test")
+async def test_new_connection(request: ConnectionCreateRequest):
+    """Test a database connection without saving it"""
+    try:
+        # Create a temporary database manager
+        temp_db = DatabaseManager(
+            host=request.host,
+            port=request.port,
+            database=request.database,
+            user=request.user,
+            password=request.password
+        )
+        
+        # Try to connect
+        conn = temp_db.get_connection()
+        
+        # Get list of tables
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = '{request.schema}'
+            ORDER BY table_name
+        """)
+        tables = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        
+        return {
+            "success": True,
+            "message": f"Successfully connected to {request.database}",
+            "tables": tables
+        }
+    except Exception as e:
+        logger.error(f"Connection test failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@app.post("/api/connections")
+async def create_connection(request: ConnectionCreateRequest):
+    """Save a new database connection"""
+    try:
+        connection_id = connection_manager.add_connection(
+            name=request.name,
+            host=request.host,
+            port=request.port,
+            database=request.database,
+            user=request.user,
+            password=request.password,
+            schema=request.schema,
+            tables=request.tables
+        )
+        
+        return {
+            "success": True,
+            "connection_id": connection_id,
+            "message": f"Connection '{request.name}' saved successfully"
+        }
+    except Exception as e:
+        logger.error(f"Failed to create connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/connections/{connection_id}")
+async def update_connection(connection_id: str, request: ConnectionCreateRequest):
+    """Update an existing connection"""
+    try:
+        success = connection_manager.update_connection(
+            connection_id,
+            name=request.name,
+            host=request.host,
+            port=request.port,
+            database=request.database,
+            user=request.user,
+            password=request.password,
+            schema=request.schema,
+            tables=request.tables
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        return {
+            "success": True,
+            "message": f"Connection updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/connections/{connection_id}")
+async def delete_connection(connection_id: str):
+    """Delete a connection"""
+    try:
+        success = connection_manager.delete_connection(connection_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Connection not found or is active")
+        
+        return {
+            "success": True,
+            "message": "Connection deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/connections/{connection_id}/activate")
+async def activate_connection(connection_id: str):
+    """Set a connection as the active connection and reinitialize RAG"""
+    global rag_instance
+    
+    try:
+        connection = connection_manager.get_connection(connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        # Create config from connection
+        config = Config(
+            host=connection['host'],
+            port=connection['port'],
+            database=connection['database'],
+            user=connection['user'],
+            password=connection['password'],
+            schema=connection['schema']
+        )
+        
+        # Initialize new RAG instance with this connection
+        rag_instance = DBRAG(config)
+        rag_instance.initialize()
+        
+        # Set as active
+        connection_manager.set_active_connection(connection_id)
+        
+        return {
+            "success": True,
+            "message": f"Connection '{connection['name']}' is now active"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to activate connection: {str(e)}")
+        connection_manager.update_connection_status(connection_id, 'error')
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SyncTablesRequest(BaseModel):
+    tables: List[str]
+
+
+@app.post("/api/connections/{connection_id}/sync")
+async def sync_connection_tables(connection_id: str, request: SyncTablesRequest):
+    """Sync metadata for selected tables in a connection"""
+    try:
+        connection = connection_manager.get_connection(connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        if not rag_instance:
+            raise HTTPException(status_code=400, detail="No active RAG instance")
+        
+        # Sync the specified tables
+        # This will use the current rag_instance metadata catalog
+        synced_count = 0
+        for table_name in request.tables:
+            try:
+                rag_instance.metadata_catalog.discover_and_add_table(table_name)
+                synced_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to sync table {table_name}: {e}")
+        
+        # Update connection with table count
+        connection_manager.update_connection(
+            connection_id,
+            tables=request.tables
+        )
+        connection_manager.update_tables_count(connection_id, synced_count)
+        
+        return {
+            "success": True,
+            "tables_synced": synced_count,
+            "message": f"Synced {synced_count} tables"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to sync tables: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
