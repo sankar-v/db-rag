@@ -1,513 +1,369 @@
-# DB-RAG: Agentic RAG for Relational Databases
+# DB-RAG - Full Stack Agentic RAG System
 
-An intelligent, scalable Agentic RAG (Retrieval-Augmented Generation) system for querying relational databases using natural language. Built with PostgreSQL and pgvector, extensible to other RDBMS and unstructured data sources.
+An intelligent Agentic Retrieval-Augmented Generation (RAG) system for PostgreSQL databases with a modern React frontend.
 
-## 🎯 Features
+## 🎯 Overview
 
-- **🤖 Agentic Architecture**: Intelligent query routing between structured (SQL) and unstructured (vector) data
-- **🔍 Automatic Table Discovery**: AI-powered metadata catalog that understands your database schema
-- **💬 Natural Language to SQL**: Convert natural language questions to optimized PostgreSQL queries
-- **📚 Vector Search**: Semantic search across unstructured documents using pgvector
-- **🔄 Hybrid Queries**: Automatically combines SQL and document search when needed
-- **🛡️ Query Validation**: Built-in SQL validation before execution
-- **📊 Schema Introspection**: Automatic understanding of tables, columns, relationships
-- **🚀 Extensible**: Designed to support multiple RDBMS and data sources
+DB-RAG combines the power of Large Language Models (LLMs) with PostgreSQL databases to enable natural language querying of both structured (SQL) and unstructured (document) data. The system uses an orchestrator pattern with specialized agents to intelligently route queries and provide accurate, context-aware responses.
 
-## 🏗️ Architecture
+## ✨ Features
 
-```
-User Query
-    ↓
-Orchestrator Agent (Router)
-    ↓
-    ├─→ SQL Agent ──→ Table Discovery ──→ SQL Generation ──→ Query Execution
-    └─→ Vector Agent ──→ Embedding Search ──→ Document Retrieval
+### Core Capabilities
+- 💬 **Conversational Chat Interface**: Ask questions in natural language with real-time responses
+- 🤖 **Intelligent Query Routing**: Automatically determines SQL, vector search, or hybrid approach
+- 📊 **SQL Generation**: Converts natural language to optimized SQL queries
+- 🔍 **Semantic Search**: Vector-based document search using pgvector
+- 📚 **AI-Generated Metadata**: Automatic table descriptions and schema understanding
 
-Results are synthesized into a coherent natural language response
-```
+### Frontend Features
+- 📁 **Document Management**: Drag-and-drop upload with real-time vectorization
+- 🔌 **Database Connectors**: Visual connection configuration and testing
+- 🗂️ **Metadata Explorer**: Browse tables with AI-generated descriptions
+- 🎨 **Modern UI**: React + TypeScript with TailwindCSS
+- ⚡ **Real-time Updates**: WebSocket support for live responses
 
-## 📋 Prerequisites
+### Infrastructure
+- 🐳 **Full Docker Stack**: PostgreSQL, Backend API, Frontend
+- 📦 **Sample Database**: Pre-loaded Pagila database (22 tables, 16k+ records)
+- 🔄 **Hot Reload**: Development mode with live code updates
+- 📝 **API Documentation**: Interactive OpenAPI docs
 
-- Python 3.8+
-- Docker and Docker Compose (recommended) **OR** PostgreSQL 12+ with pgvector
+## 🚀 Quick Start
+
+### Prerequisites
+- Docker and Docker Compose
 - OpenAI API key
 
-## 🚀 Quick Start with Docker (Recommended)
-
-The easiest way to get started is using Docker with the **Pagila sample DVD rental database**:
+### One-Command Setup
 
 ```bash
-# 1. Clone the repository and navigate to it
+# Clone and navigate to the repository
 cd db-rag
 
-# 2. Copy and configure environment
+# Create environment file with your OpenAI API key
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+# Edit .env and add: OPENAI_API_KEY=sk-your-key-here
 
-# 3. Run setup script (includes Pagila database)
-chmod +x setup_docker.sh
-./setup_docker.sh
-
-# 4. Start querying!
-python examples/cli.py
+# Run the automated setup script
+chmod +x start.sh
+./start.sh
 ```
 
-This will:
-- ✅ Start PostgreSQL 16 with pgvector extension
-- ✅ Load Pagila sample database (16 tables with DVD rental data)
-- ✅ Create DB-RAG tables and indexes
-- ✅ Load sample policy documents
-- ✅ Run verification tests
+The script will:
+1. Build all Docker containers (PostgreSQL, Backend, Frontend)
+2. Load the Pagila sample database
+3. Start all services and verify health
+4. Display access URLs
 
-See [DOCKER_SETUP.md](DOCKER_SETUP.md) for detailed Docker documentation.
+### Access the Application
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
+- **PostgreSQL**: localhost:5433 (user: postgres, password: postgres, database: pagila)
 
-## 🐳 Manual Installation (Without Docker)
-
-1. **Install dependencies**:
-```bash
-pip install -r requirements.txt
-```
-
-2. **Set up PostgreSQL with pgvector**:
-```bash
-# Install pgvector extension (macOS with Homebrew)
-brew install pgvector
-
-# Or on Ubuntu/Debian
-sudo apt-get install postgresql-14-pgvector
-
-# Connect to your database and enable the extension
-psql -d your_database -c "CREATE EXTENSION vector;"
-```
-
-3. **Configure environment variables**:
-```bash
-cp .env.example .env
-# Edit .env with your database credentials and OpenAI API key
-```
-
-4. **Initialize the database schema**:
-```bash
-psql -d your_database -f script.sql
-```
-
-## ⚙️ Configuration
-
-Edit `.env` file:
-
-```bash
-# Database Configuration
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=corp_db
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_SCHEMA=public
-
-# OpenAI Configuration
-OPENAI_API_KEY=sk-your-api-key-here
-LLM_MODEL=gpt-4o
-EMBEDDING_MODEL=text-embedding-3-small
-
-# RAG Configuration
-ENABLE_VECTOR_SEARCH=true
-ENABLE_SQL_SEARCH=true
-MAX_CONTEXT_TABLES=5
-MAX_VECTOR_RESULTS=3
-```
-
-## 📖 Usage
-
-### Example Queries for Pagila Database
-
-With the Docker setup, you can immediately query the Pagila DVD rental database:
-
-```python
-from main import DBRAG
-
-with DBRAG() as rag:
-    rag.initialize()
-    
-    # Customer analytics
-    result = rag.query("How many customers do we have?")
-    print(result['answer'])
-    
-    # Rental analytics
-    result = rag.query("What are the most popular film categories?")
-    print(result['answer'])
-    
-    # Policy questions (vector search)
-    result = rag.query("What is the DVD rental policy?")
-    print(result['answer'])
-    
-    # Hybrid query (SQL + Vector)
-    result = rag.query("How many rentals did we have yesterday and what's our refund policy?")
-    print(result['answer'])
-```
-
-### Basic Example
-
-```python
-from main import DBRAG
-
-# Initialize the system
-with DBRAG() as rag:
-    # Initialize database structures and metadata
-    rag.initialize()
-    
-    # Ask a question
-    result = rag.query("What was our total sales last month?")
-    print(result['answer'])
-```
-
-### Advanced Usage
-
-```python
-from main import DBRAG
-from dotenv import load_dotenv
-
-load_dotenv()
-
-with DBRAG() as rag:
-    # Initialize system
-    rag.initialize()
-    
-    # Sync metadata catalog (analyzes all tables)
-    rag.sync_metadata(force_update=False)
-    
-    # Add unstructured documents
-    doc_id = rag.add_document(
-        content="Our refund policy allows returns within 30 days...",
-        metadata={"source": "policy_handbook", "department": "customer_service"}
-    )
-    
-    # Query structured data only
-    sql_result = rag.query_sql_only("Show top 10 customers by revenue")
-    print(f"SQL: {sql_result['sql']}")
-    print(f"Results: {sql_result['results']}")
-    
-    # Search documents only
-    doc_result = rag.search_documents_only("What is the refund policy?")
-    for doc in doc_result['documents']:
-        print(f"Similarity: {doc['similarity']:.3f}")
-        print(f"Content: {doc['content']}")
-    
-    # Hybrid query (automatic routing)
-    hybrid_result = rag.query(
-        "What were our sales yesterday and what is our refund policy?"
-    )
-    print(f"Answer: {hybrid_result['answer']}")
-```
-
-### Command Line Interface
-
-```python
-# examples/cli.py
-from main import DBRAG
-from dotenv import load_dotenv
-
-def main():
-    load_dotenv()
-    
-    with DBRAG() as rag:
-        rag.initialize()
-        
-        print("DB-RAG Query Interface")
-        print("Type 'quit' to exit\n")
-        
-        while True:
-            query = input("Enter your question: ")
-            if query.lower() in ['quit', 'exit']:
-                break
-            
-            result = rag.query(query)
-            print(f"\nAnswer: {result['answer']}\n")
-            
-            if result.get('sql_results'):
-                print(f"SQL Used: {result['sql_results'].get('sql')}\n")
-
-if __name__ == "__main__":
-    main()
-```
-
-## 🧪 Testing
-
-### Run End-to-End Tests
-
-The test suite includes comprehensive tests for all query types:
-
-```bash
-# Make sure Docker containers are running
-docker-compose up -d
-
-# Run the complete test suite
-python test_e2e.py
-```
-
-Test categories include:
-- **Customer Analytics**: Customer counts, top customers, demographics
-- **Rental Analytics**: Popular categories, revenue, rental patterns
-- **Inventory Management**: Film counts, store inventory, categories
-- **Staff Analytics**: Employee counts, store assignments
-- **Policy Questions**: Vector search for policies and procedures
-- **Hybrid Queries**: Combined SQL and document search
-
-### Individual Example Scripts
-
-```bash
-# Interactive CLI
-python examples/cli.py
-
-# Document ingestion examples
-python examples/ingest_documents.py
-
-# SQL generation tests
-python examples/test_sql_generation.py
-
-# Hybrid query tests
-python examples/test_hybrid_queries.py
-```
-
-## 🔧 API Reference
-
-### DBRAG Class
-
-```python
-class DBRAG:
-    def __init__(self, config: Optional[Config] = None)
-    def initialize() -> None
-    def sync_metadata(force_update: bool = False) -> None
-    def add_document(content: str, metadata: dict = None) -> str
-    def query(question: str) -> dict
-    def query_sql_only(question: str) -> dict
-    def search_documents_only(query: str) -> dict
-    def close() -> None
-```
-
-### Response Format
-
-```python
-{
-    "success": True,
-    "query": "What was our total sales last month?",
-    "answer": "Your total sales last month were $1,234,567...",
-    "routing": [...],  # Which agents were used
-    "sql_results": {   # If SQL agent was used
-        "sql": "SELECT SUM(amount) FROM sales WHERE...",
-        "tables_used": ["sales"],
-        "results": [...],
-        "row_count": 1
-    },
-    "vector_results": {  # If vector agent was used
-        "documents": [...],
-        "count": 3
-    }
-}
-```
-
-## 🗂️ Project Structure
+## 📁 Project Structure
 
 ```
 db-rag/
-├── config.py              # Configuration management
-├── database.py            # Database connection and introspection
-├── metadata_catalog.py    # Table discovery and metadata management
-├── sql_agent.py           # SQL query generation and execution
-├── vector_agent.py        # Vector search for unstructured data
-├── orchestrator.py        # Main routing and orchestration logic
-├── main.py                # Entry point and high-level API
-├── test_e2e.py            # End-to-end test suite
-├── script.sql             # Database schema initialization (legacy)
-├── requirements.txt       # Python dependencies
-├── .env.example          # Example environment configuration
-├── docker-compose.yml     # Docker orchestration
-├── setup_docker.sh        # Automated Docker setup script
-├── DOCKER_SETUP.md       # Detailed Docker documentation
-├── README.md             # This file
-├── docker/
-│   ├── Dockerfile         # PostgreSQL + pgvector image
-│   └── init-scripts/      # Database initialization scripts
-│       ├── 01-load-pagila.sh
-│       ├── 02-setup-dbrag-tables.sh
-│       └── 03-load-sample-documents.sh
-└── examples/
-    ├── cli.py             # Interactive CLI
-    ├── ingest_documents.py
-    ├── test_sql_generation.py
-    ├── test_hybrid_queries.py
-    └── README.md
+├── backend/                  # FastAPI backend
+│   ├── api.py               # REST API & WebSocket endpoints
+│   ├── main.py              # DB-RAG core system
+│   ├── orchestrator.py      # Query routing agent
+│   ├── sql_agent.py         # SQL generation agent
+│   ├── vector_agent.py      # Semantic search agent
+│   ├── metadata_catalog.py  # AI-powered table discovery
+│   ├── database.py          # Database manager
+│   ├── config.py            # Configuration
+│   ├── requirements.txt     # Python dependencies
+│   └── Dockerfile           # Backend container
+│
+├── frontend/                 # React + TypeScript frontend
+│   ├── src/
+│   │   ├── pages/           # Page components
+│   │   │   ├── ChatInterface.tsx
+│   │   │   ├── DocumentManager.tsx
+│   │   │   ├── DatabaseConnections.tsx
+│   │   │   └── MetadataExplorer.tsx
+│   │   ├── components/      # Shared components
+│   │   ├── api/             # API client
+│   │   └── App.tsx          # Main app
+│   ├── package.json
+│   └── Dockerfile           # Frontend container
+│
+├── docker/                   # PostgreSQL setup
+│   ├── Dockerfile           # Custom PostgreSQL image
+│   └── init-scripts/        # Database initialization
+│
+├── docker-compose.yml       # Multi-container orchestration
+├── start.sh                 # Automated setup script
+└── README.md
 ```
 
-## 🎬 Pagila Sample Database
+## 🎮 Usage Examples
 
-The Docker setup includes the **Pagila** database - a PostgreSQL port of the MySQL Sakila sample database representing a DVD rental store. It includes:
+### Chat Interface
+Navigate to http://localhost:3000/chat and ask questions like:
 
-### Database Schema (16 Tables)
-
-**Core Business Tables:**
-- `customer` - Customer information (599 customers)
-- `film` - Movie catalog (1,000 films)
-- `rental` - Rental transactions (16,044 rentals)
-- `payment` - Payment records
-- `inventory` - Film inventory by store
-- `store` - Store locations (2 stores)
-- `staff` - Employee information
-
-**Supporting Tables:**
-- `actor`, `film_actor` - Actor information and film relationships
-- `category`, `film_category` - Film categories (Action, Comedy, Drama, etc.)
-- `address`, `city`, `country` - Location data
-- `language` - Film languages
-
-### Sample Questions You Can Ask
-
-**Customer Analytics:**
+**Database Queries (SQL)**:
 - "How many customers do we have?"
-- "Show me customers from California"
-- "Who are our top 10 customers by rental count?"
+- "What are the top 5 most rented films?"
+- "Show me all rentals from last week"
+- "Which staff member processed the most payments?"
 
-**Rental & Revenue:**
-- "What was our total rental revenue last month?"
-- "Which films have been rented the most?"
-- "What's the average rental duration?"
+**Document Queries (Vector Search)**:
+- "What is our vacation policy?"
+- "Tell me about employee benefits"
+- "What are the company holidays?"
 
-**Inventory & Films:**
-- "How many films are in the Action category?"
-- "Which store has more inventory?"
-- "List all films starring 'PENELOPE GUINESS'"
+### Document Management
+1. Navigate to the **Documents** page
+2. Drag and drop files or paste text
+3. Documents are automatically vectorized
+4. Search them via the chat interface
 
-**Policy Questions (Vector Search):**
-- "What is the DVD rental policy?"
-- "How do refunds work?"
-- "What are the membership benefits?"
+### Database Connections
+1. Go to the **Connections** page
+2. Default settings work with the Docker setup:
+   - Host: localhost
+   - Port: 5433
+   - Database: pagila
+   - User: postgres
+   - Password: postgres
+3. Test connection before applying
 
-**Hybrid Queries:**
-- "Show me top customers and explain our refund policy"
-- "What's our most popular category and what's the rental policy?"
-├── .env.example          # Example environment configuration
-└── README.md             # This file
+### Metadata Explorer
+1. Go to the **Metadata** page
+2. Browse all 22 tables
+3. View AI-generated descriptions
+4. See column details and sample data
+5. Click "Sync Metadata" to refresh
+
+## 🔧 API Endpoints
+
+### Query Endpoints
+- `POST /api/query` - Main query endpoint with auto-routing
+- `WS /ws/chat` - WebSocket for real-time chat
+- `POST /api/query/sql` - SQL-only queries
+- `POST /api/query/vector` - Vector search only
+
+### Document Endpoints
+- `GET /api/documents` - List all documents
+- `POST /api/documents` - Add text document
+- `POST /api/documents/upload` - Upload file
+
+### Table Endpoints
+- `GET /api/tables` - List all tables
+- `GET /api/tables/{name}` - Get table metadata
+- `POST /api/metadata/sync` - Sync metadata catalog
+
+### Connection Endpoints
+- `POST /api/connection/test` - Test database connection
+- `POST /api/connection/configure` - Apply new configuration
+
+### System Endpoints
+- `GET /health` - Health check
+- `GET /api/status` - Detailed system status
+
+## 🛠️ Development
+
+### Backend Development
+```bash
+cd backend
+pip install -r requirements.txt
+
+# Run with hot reload
+python -m uvicorn api:app --reload
+
+# Run tests
+python test_e2e.py
 ```
 
-## 🎓 How It Works
+### Frontend Development
+```bash
+cd frontend
+npm install
 
-### 1. Metadata Catalog
-The system automatically introspects your database schema and uses an LLM to generate:
-- Human-readable descriptions of each table
-- Business context and common use cases
-- Example questions that can be answered
-- Vector embeddings for semantic table discovery
+# Run dev server with hot reload
+npm run dev
 
-### 2. Query Routing
-When you ask a question, the orchestrator:
-1. Analyzes the intent (structured vs unstructured data)
-2. Routes to appropriate agent(s)
-3. May call both agents for hybrid queries
-
-### 3. SQL Generation
-The SQL Agent:
-1. Discovers relevant tables using vector similarity
-2. Retrieves detailed schema information
-3. Generates optimized SQL queries
-4. Validates queries before execution
-5. Returns structured results
-
-### 4. Vector Search
-The Vector Agent:
-1. Generates embeddings for queries
-2. Performs cosine similarity search
-3. Returns relevant documents with scores
-
-### 5. Response Synthesis
-The orchestrator combines all results into a coherent natural language answer.
-
-## 🔮 Extensibility
-
-### Adding New RDBMS Support
-
-The system is designed for extensibility. To add support for other databases:
-
-1. **Create a new database manager** (e.g., `mysql_database.py`)
-2. **Implement the same interface** as `DatabaseManager`
-3. **Update configuration** to support new database types
-
-```python
-# Example: MySQL support
-class MySQLDatabaseManager(DatabaseManager):
-    def get_connection_string(self):
-        return f"mysql+pymysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+# Build for production
+npm run build
 ```
 
-### Adding New Data Sources
+### Docker Commands
 
-To add unstructured data sources (PDFs, APIs, etc.):
+**Start all services:**
+```bash
+docker-compose up
+```
 
-1. **Create a data loader** module
-2. **Chunk and embed documents**
-3. **Use `vector_agent.add_document()`** to store
+**Rebuild after code changes:**
+```bash
+docker-compose up --build
+```
 
-```python
-# Example: PDF ingestion
-from PyPDF2 import PdfReader
-from main import DBRAG
+**Stop services:**
+```bash
+docker-compose down
+```
 
-def ingest_pdf(pdf_path: str, rag: DBRAG):
-    reader = PdfReader(pdf_path)
-    for i, page in enumerate(reader.pages):
-        content = page.extract_text()
-        rag.add_document(
-            content=content,
-            metadata={"source": pdf_path, "page": i}
-        )
+**View logs:**
+```bash
+docker-compose logs -f backend
+docker-compose logs -f frontend
+docker-compose logs -f postgres
+```
+
+**Access PostgreSQL:**
+```bash
+docker exec -it dbrag-postgres psql -U postgres -d pagila
+```
+
+## 📊 Sample Database
+
+The system includes the **Pagila** sample database (PostgreSQL version of the Sakila MySQL database):
+
+**Statistics:**
+- 22 tables (customers, films, rentals, payments, etc.)
+- 599 customers
+- 1,000 films across 16 categories
+- 16,044 rental transactions
+- Complete DVD rental store schema
+
+**Key Tables:**
+- `customer` - Customer information
+- `film` - Film catalog with descriptions
+- `rental` - Rental transactions
+- `payment` - Payment records
+- `actor`, `category`, `inventory`, etc.
+
+## 🏗️ Architecture
+
+### Query Flow
+1. User enters natural language question in frontend
+2. Frontend sends to `/api/query` via REST or WebSocket
+3. **Orchestrator Agent** analyzes query intent using GPT-4
+4. Routes to **SQL Agent** and/or **Vector Agent**
+5. **SQL Agent**: Discovers relevant tables → Generates SQL → Validates → Executes
+6. **Vector Agent**: Embeds query → Searches vectors → Returns relevant documents
+7. Orchestrator synthesizes results into natural language
+8. Response displayed in chat interface
+
+### Key Components
+
+**Backend (Python/FastAPI):**
+- **Orchestrator Agent**: Query routing and response synthesis
+- **SQL Agent**: Table discovery and SQL generation
+- **Vector Agent**: Semantic document search with pgvector
+- **Metadata Catalog**: AI-generated table descriptions
+- **Database Manager**: PostgreSQL operations and connection management
+
+**Frontend (React/TypeScript):**
+- **Chat Interface**: Conversational UI with message history
+- **Document Manager**: File upload and document listing
+- **Connection Manager**: Database configuration UI
+- **Metadata Explorer**: Table browsing and visualization
+- **Layout**: Responsive navigation and status indicators
+
+## 📝 Tech Stack
+
+### Backend
+- **FastAPI** - Modern Python web framework with async support
+- **PostgreSQL 16** - Database with pgvector extension
+- **OpenAI GPT-4** - Query understanding and routing
+- **text-embedding-3-small** - Document vectorization
+- **SQLAlchemy** - ORM and query building
+- **psycopg2** - PostgreSQL adapter
+- **Uvicorn** - ASGI server
+
+### Frontend
+- **React 18** - UI framework
+- **TypeScript** - Type-safe JavaScript
+- **Vite** - Fast build tool and dev server
+- **TailwindCSS** - Utility-first CSS framework
+- **TanStack Query** - Server state management
+- **React Router** - Client-side routing
+- **Axios** - HTTP client
+- **React Markdown** - Markdown rendering
+- **Lucide React** - Icon library
+
+## 🔐 Environment Variables
+
+Create a `.env` file with:
+
+```bash
+# Required: OpenAI Configuration
+OPENAI_API_KEY=sk-your-api-key-here
+
+# Optional: Database Configuration (defaults shown)
+DB_HOST=localhost
+DB_PORT=5433
+DB_NAME=pagila
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_SCHEMA=public
+
+# Optional: LLM Configuration
+LLM_MODEL=gpt-4o
+LLM_TEMPERATURE=0.0
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
 ```
 
 ## 🐛 Troubleshooting
 
-### pgvector not installed
-```bash
-# Install pgvector extension
-sudo apt-get install postgresql-14-pgvector
-# Or brew install pgvector on macOS
-```
+### Backend won't start
+- Verify OpenAI API key is set in `.env`
+- Check PostgreSQL is running: `docker ps | grep postgres`
+- View logs: `docker-compose logs backend`
 
-### Connection errors
-- Verify PostgreSQL is running
-- Check credentials in `.env`
-- Ensure database exists
+### Frontend shows "Disconnected"
+- Ensure backend is running on port 8000
+- Check CORS settings in `backend/api.py`
+- View network tab in browser DevTools
 
-### API rate limits
-- Adjust `temperature` and `max_tokens` in config
-- Consider caching embeddings
-- Use smaller embedding models if needed
+### Database connection failed
+- Verify PostgreSQL port 5433 is not in use
+- Check credentials in Connections page
+- Test connection: `docker exec dbrag-postgres pg_isready -U postgres`
 
-## 📚 Examples
-
-See the `examples/` directory for:
-- CLI interface
-- Batch document ingestion
-- Custom query workflows
-- Integration patterns
+### Port already in use
+- Stop conflicting services
+- Or change ports in `docker-compose.yml`
 
 ## 🤝 Contributing
 
-Contributions are welcome! Areas for enhancement:
-- Additional RDBMS support (MySQL, SQL Server, Oracle)
-- Query optimization and caching
-- Multi-language support
-- Enhanced error handling
-- Performance benchmarks
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
 ## 📄 License
 
-See LICENSE file for details.
+MIT License - see LICENSE file for details
 
-## 🙏 Acknowledgments
+## 🙋 Support
 
-- Built with OpenAI's GPT-4 and embedding models
-- Uses pgvector for efficient vector similarity search
-- Inspired by modern RAG architectures
+- **Issues**: Open an issue on GitHub
+- **Discussions**: Use GitHub Discussions
+- **Email**: [Your contact]
 
+## 🔮 Roadmap
 
-References:
+- [ ] Multi-database support (MySQL, SQL Server, Oracle)
+- [ ] Advanced query optimization
+- [ ] Query history and saved queries
+- [ ] User authentication and authorization
+- [ ] Custom agent creation
+- [ ] Export results to CSV/Excel
+- [ ] GraphQL support
+- [ ] Slack/Teams integration
+- [ ] Query performance analytics
+- [ ] Natural language chart generation
 
-https://wiki.postgresql.org/wiki/Sample_Databases
-https://github.com/devrimgunduz/pagila
+---
+
+**Built with ❤️ using OpenAI GPT-4, PostgreSQL, FastAPI, and React**
