@@ -86,9 +86,19 @@ Return your response in JSON format with keys: 'sql', 'explanation', 'tables_use
             
             content = response.choices[0].message.content
             
+            # Clean up content - remove markdown json code blocks
+            cleaned_content = content.strip()
+            if cleaned_content.startswith("```json"):
+                cleaned_content = cleaned_content[7:]  # Remove ```json
+            elif cleaned_content.startswith("```"):
+                cleaned_content = cleaned_content[3:]  # Remove ```
+            if cleaned_content.endswith("```"):
+                cleaned_content = cleaned_content[:-3]  # Remove trailing ```
+            cleaned_content = cleaned_content.strip()
+            
             # Try to parse as JSON
             try:
-                result = json.loads(content)
+                result = json.loads(cleaned_content)
                 if "sql" in result:
                     logger.info("Generated SQL query successfully")
                     return result

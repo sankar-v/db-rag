@@ -30,7 +30,7 @@ export default function MetadataExplorer() {
   })
 
   const filteredTables = tables?.filter((table) =>
-    table.table_name.toLowerCase().includes(searchQuery.toLowerCase())
+    table?.table_name?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   return (
