@@ -1,14 +1,24 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Upload, FileText, Trash2, Loader2, Plus, Calendar, File } from 'lucide-react'
+import { Upload, FileText, Trash2, Loader2, Plus, Calendar, File, CheckCircle, AlertCircle } from 'lucide-react'
 import { documentAPI } from '../api/client'
 import { useContextStore } from '../store/contextStore'
+
+interface UploadStatus {
+  filename: string
+  status: 'uploading' | 'vectorizing' | 'complete' | 'error'
+  progress?: string
+  error?: string
+  documentId?: string
+}
 
 export default function DocumentManager() {
   const [uploadMode, setUploadMode] = useState<'text' | 'file'>('file')
   const [textContent, setTextContent] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+  const [uploadStatuses, setUploadStatuses] = useState<UploadStatus[]>([])
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const queryClient = useQueryClient()
   const { selectedDocumentIds, toggleDocument } = useContextStore()
 
@@ -27,8 +37,39 @@ export default function DocumentManager() {
   // Upload file mutation
   const uploadFileMutation = useMutation({
     mutationFn: documentAPI.upload,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    onSuccess: (documentId, file) => {
+      // Update status to vectorizing
+      setUploadStatuses(prev => prev.map(status => 
+        status.filename === file.name 
+          ? { ...status, status: 'vectorizing', progress: 'Creating embeddings...', documentId }
+          : status
+      ))
+      
+      // Wait a moment to simulate vectorization, then mark complete
+      setTimeout(() => {
+        setUploadStatuses(prev => prev.map(status => 
+          status.filename === file.name 
+            ? { ...status, status: 'complete', progress: 'Document ready' }
+            : status
+        ))
+        
+        // Auto-select the new document
+        setSelectedDocId(documentId)
+        
+        // Clear status after 3 seconds
+        setTimeout(() => {
+          setUploadStatuses(prev => prev.filter(s => s.filename !== file.name))
+        }, 3000)
+        
+        queryClient.invalidateQueries({ queryKey: ['documents'] })
+      }, 1500)
+    },
+    onError: (error: any, file) => {
+      setUploadStatuses(prev => prev.map(status => 
+        status.filename === file.name 
+          ? { ...status, status: 'error', error: error.message || 'Upload failed' }
+          : status
+      ))
     },
   })
 
@@ -36,18 +77,58 @@ export default function DocumentManager() {
   const addTextMutation = useMutation({
     mutationFn: ({ content, metadata }: { content: string; metadata?: any }) =>
       documentAPI.add(content, metadata),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
-      setTextContent('')
+    onSuccess: (documentId) => {
+      const filename = 'Text Document'
+      
+      // Add status
+      setUploadStatuses(prev => [...prev, { 
+        filename, 
+        status: 'vectorizing', 
+        progress: 'Creating embeddings...',
+        documentId 
+      }])
+      
+      // Mark complete after vectorization
+      setTimeout(() => {
+        setUploadStatuses(prev => prev.map(status => 
+          status.filename === filename 
+            ? { ...status, status: 'complete', progress: 'Document ready' }
+            : status
+        ))
+        
+        setSelectedDocId(documentId)
+        setTextContent('')
+        
+        setTimeout(() => {
+          setUploadStatuses(prev => prev.filter(s => s.filename !== filename))
+        }, 3000)
+        
+        queryClient.invalidateQueries({ queryKey: ['documents'] })
+      }, 1500)
     },
   })
 
   const handleFileSelect = (files: FileList | null) => {
     if (!files || files.length === 0) return
+    setSelectedFiles(Array.from(files))
+  }
 
-    Array.from(files).forEach((file) => {
+  const handleUploadClick = () => {
+    if (selectedFiles.length === 0) return
+
+    selectedFiles.forEach((file) => {
+      // Add initial status
+      setUploadStatuses(prev => [...prev, {
+        filename: file.name,
+        status: 'uploading',
+        progress: 'Uploading...'
+      }])
+      
       uploadFileMutation.mutate(file)
     })
+    
+    // Clear selected files
+    setSelectedFiles([])
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -114,6 +195,43 @@ export default function DocumentManager() {
             <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3">
               Documents ({documents?.length || 0}) {selectedDocumentIds.length > 0 && `· ${selectedDocumentIds.length} selected`}
             </h3>
+            
+            {/* Upload Progress */}
+            {uploadStatuses.length > 0 && (
+              <div className="mb-4 space-y-2">
+                {uploadStatuses.map((status, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-slate-700 rounded-lg p-3 border border-slate-600"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      {status.status === 'uploading' && (
+                        <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                      )}
+                      {status.status === 'vectorizing' && (
+                        <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+                      )}
+                      {status.status === 'complete' && (
+                        <CheckCircle className="w-4 h-4 text-green-400" />
+                      )}
+                      {status.status === 'error' && (
+                        <AlertCircle className="w-4 h-4 text-red-400" />
+                      )}
+                      <span className="text-sm font-medium text-white truncate flex-1">
+                        {status.filename}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {status.status === 'uploading' && 'Uploading file...'}
+                      {status.status === 'vectorizing' && 'Creating embeddings...'}
+                      {status.status === 'complete' && 'Ready for search'}
+                      {status.status === 'error' && (status.error || 'Upload failed')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            
             {isLoading ? (
               <div className="text-slate-400 text-sm flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -214,45 +332,88 @@ export default function DocumentManager() {
 
                 {/* File Upload */}
                 {uploadMode === 'file' && (
-                  <div
-                    onDragOver={(e) => {
-                      e.preventDefault()
-                      setIsDragging(true)
-                    }}
-                    onDragLeave={() => setIsDragging(false)}
-                    onDrop={handleDrop}
-                    className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors ${
-                      isDragging
-                        ? 'border-primary-500 bg-primary-500/10'
-                        : 'border-slate-600 hover:border-slate-500'
-                    }`}
-                  >
-                    <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-                    <p className="text-white mb-2">
-                      Drag and drop files here, or click to select
-                    </p>
-                    <p className="text-sm text-slate-400 mb-4">
-                      Supports .txt, .md, .pdf, .doc files
-                    </p>
-                    <input
-                      type="file"
-                      multiple
-                      onChange={(e) => handleFileSelect(e.target.files)}
-                      className="hidden"
-                      id="file-upload"
-                      accept=".txt,.md,.pdf,.doc,.docx"
-                    />
-                    <label
-                      htmlFor="file-upload"
-                      className="bg-primary-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-primary-700 inline-block"
+                  <div className="space-y-4">
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        setIsDragging(true)
+                      }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleDrop}
+                      className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors ${
+                        isDragging
+                          ? 'border-primary-500 bg-primary-500/10'
+                          : 'border-slate-600 hover:border-slate-500'
+                      }`}
                     >
-                      Select Files
-                    </label>
+                      <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
+                      <p className="text-white mb-2">
+                        Drag and drop files here, or click to select
+                      </p>
+                      <p className="text-sm text-slate-400 mb-4">
+                        Supports PDF, TXT, MD, CSV, JSON, XML files
+                      </p>
+                      <input
+                        type="file"
+                        multiple
+                        onChange={(e) => handleFileSelect(e.target.files)}
+                        className="hidden"
+                        id="file-upload"
+                        accept=".txt,.md,.pdf,.csv,.json,.xml"
+                      />
+                      <label
+                        htmlFor="file-upload"
+                        className="bg-slate-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-slate-500 inline-block"
+                      >
+                        Select Files
+                      </label>
+                    </div>
 
-                    {uploadFileMutation.isPending && (
-                      <div className="mt-4 flex items-center justify-center gap-2 text-primary-400">
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>Uploading and vectorizing...</span>
+                    {/* Selected Files Display */}
+                    {selectedFiles.length > 0 && (
+                      <div className="bg-slate-700 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-medium text-white">
+                            Selected Files ({selectedFiles.length})
+                          </h4>
+                          <button
+                            onClick={() => setSelectedFiles([])}
+                            className="text-xs text-slate-400 hover:text-white"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <div className="space-y-2 mb-4">
+                          {selectedFiles.map((file, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center gap-2 text-sm bg-slate-800 rounded p-2"
+                            >
+                              <File className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                              <span className="text-white flex-1 truncate">{file.name}</span>
+                              <span className="text-slate-400 text-xs">
+                                {(file.size / 1024).toFixed(1)} KB
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          onClick={handleUploadClick}
+                          disabled={uploadFileMutation.isPending}
+                          className="w-full bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 disabled:bg-slate-600 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium"
+                        >
+                          {uploadFileMutation.isPending ? (
+                            <>
+                              <Loader2 className="w-5 h-5 animate-spin" />
+                              Uploading and vectorizing...
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="w-5 h-5" />
+                              Upload {selectedFiles.length} {selectedFiles.length === 1 ? 'File' : 'Files'}
+                            </>
+                          )}
+                        </button>
                       </div>
                     )}
                   </div>
@@ -294,8 +455,8 @@ export default function DocumentManager() {
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
                 <div className="flex items-start justify-between mb-6">
                   <div className="flex items-center gap-4">
-                    <div className="p-3 bg-primary-500/10 rounded-lg">
-                      <File className="w-8 h-8 text-primary-500" />
+                    <div className="p-3 bg-green-500/10 rounded-lg">
+                      <FileText className="w-8 h-8 text-green-500" />
                     </div>
                     <div>
                       <h3 className="text-2xl font-bold text-white mb-1">
@@ -306,7 +467,9 @@ export default function DocumentManager() {
                         Added on {new Date(selectedDoc.created_at).toLocaleDateString('en-US', {
                           year: 'numeric',
                           month: 'long',
-                          day: 'numeric'
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
                         })}
                       </p>
                     </div>
@@ -320,33 +483,48 @@ export default function DocumentManager() {
                   </button>
                 </div>
 
+                {/* Vectorization Status */}
+                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-green-400" />
+                    <div>
+                      <div className="text-green-400 font-medium mb-1">
+                        Document Vectorized
+                      </div>
+                      <div className="text-sm text-green-300/70">
+                        This document has been processed and is ready for semantic search
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Document Metadata */}
                 <div className="grid grid-cols-3 gap-4 mb-6 pb-6 border-b border-slate-700">
-                  <div>
-                    <div className="text-sm text-slate-400 mb-1">Source</div>
+                  <div className="bg-slate-900 rounded-lg p-3">
+                    <div className="text-xs text-slate-400 mb-1">Source</div>
                     <div className="text-white font-medium">
                       {selectedDoc.metadata?.source || 'Manual Entry'}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-sm text-slate-400 mb-1">Type</div>
+                  <div className="bg-slate-900 rounded-lg p-3">
+                    <div className="text-xs text-slate-400 mb-1">Type</div>
                     <div className="text-white font-medium">
-                      {selectedDoc.metadata?.type || 'Text Document'}
+                      {selectedDoc.metadata?.type || selectedDoc.metadata?.filename?.split('.').pop()?.toUpperCase() || 'Text'}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-sm text-slate-400 mb-1">Length</div>
+                  <div className="bg-slate-900 rounded-lg p-3">
+                    <div className="text-xs text-slate-400 mb-1">Size</div>
                     <div className="text-white font-medium">
-                      {selectedDoc.content.length} characters
+                      {(selectedDoc.content.length / 1024).toFixed(2)} KB
                     </div>
                   </div>
                 </div>
 
                 {/* Document Content */}
                 <div>
-                  <h4 className="text-sm font-semibold text-slate-400 uppercase mb-3">Content</h4>
-                  <div className="bg-slate-900 rounded-lg p-4 max-h-96 overflow-y-auto">
-                    <pre className="text-slate-300 text-sm whitespace-pre-wrap font-sans">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase mb-3">Content Preview</h4>
+                  <div className="bg-slate-900 rounded-lg p-4 max-h-96 overflow-y-auto border border-slate-700">
+                    <pre className="text-slate-300 text-sm whitespace-pre-wrap font-sans leading-relaxed">
                       {selectedDoc.content}
                     </pre>
                   </div>

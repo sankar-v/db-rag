@@ -425,23 +425,120 @@ async def upload_document(file: UploadFile = File(...)):
     try:
         # Read file content
         content = await file.read()
-        text_content = content.decode('utf-8')
         
-        # Add to vector store
-        doc_id = rag_instance.add_document(
-            text_content,
-            metadata={
-                "filename": file.filename,
-                "content_type": file.content_type,
-                "source": "upload"
-            }
-        )
+        # Extract text based on file type
+        filename = file.filename or "unknown"
+        file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
         
-        return DocumentResponse(
-            success=True,
-            document_id=doc_id,
-            message=f"File '{file.filename}' uploaded and vectorized successfully"
-        )
+        if file_ext == 'pdf':
+            # Extract text from PDF
+            try:
+                import PyPDF2
+                import io
+                
+                pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+                text_content = ""
+                for page in pdf_reader.pages:
+                    text_content += page.extract_text() + "\n"
+                
+                if not text_content.strip():
+                    raise ValueError("No text could be extracted from PDF")
+                    
+            except ImportError:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="PDF support not installed. Please install PyPDF2: pip install PyPDF2"
+                )
+            except Exception as e:
+                logger.error(f"Failed to extract text from PDF: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Failed to process PDF: {str(e)}")
+        
+        elif file_ext in ['txt', 'md', 'csv', 'json', 'xml']:
+            # Text-based files
+            try:
+                text_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                # Try other encodings
+                try:
+                    text_content = content.decode('latin-1')
+                except:
+                    raise HTTPException(status_code=400, detail="Unable to decode file. Please ensure it's a valid text file.")
+        
+        elif file_ext in ['doc', 'docx']:
+            raise HTTPException(
+                status_code=400,
+                detail="Word documents not yet supported. Please convert to PDF or text format."
+            )
+        
+        else:
+            # Try to decode as text
+            try:
+                text_content = content.decode('utf-8')
+            except:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: .{file_ext}. Supported formats: PDF, TXT, MD, CSV, JSON, XML"
+                )
+        
+        # Chunk large documents to handle token limits
+        # OpenAI's text-embedding-ada-002 has 8191 token limit
+        # Approximate: 1 token ~= 4 characters, so chunk at ~24,000 chars to be safe
+        max_chunk_chars = 20000
+        
+        if len(text_content) > max_chunk_chars:
+            # Generate a unique parent document ID
+            import uuid
+            parent_doc_id = str(uuid.uuid4())
+            
+            # Split into chunks
+            chunks = []
+            for i in range(0, len(text_content), max_chunk_chars):
+                chunk = text_content[i:i + max_chunk_chars]
+                chunks.append(chunk)
+            
+            # Add each chunk as a separate document with chunk metadata
+            doc_ids = []
+            for idx, chunk in enumerate(chunks):
+                doc_id = rag_instance.add_document(
+                    chunk,
+                    metadata={
+                        "filename": filename,
+                        "content_type": file.content_type,
+                        "file_type": file_ext,
+                        "source": "upload",
+                        "size_bytes": len(content),
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                        "parent_doc_id": parent_doc_id
+                    }
+                )
+                doc_ids.append(doc_id)
+            
+            return DocumentResponse(
+                success=True,
+                document_id=parent_doc_id,  # Return parent ID
+                message=f"File '{filename}' uploaded and split into {len(chunks)} chunks for vectorization"
+            )
+        else:
+            # Add to vector store as single document
+            doc_id = rag_instance.add_document(
+                text_content,
+                metadata={
+                    "filename": filename,
+                    "content_type": file.content_type,
+                    "file_type": file_ext,
+                    "source": "upload",
+                    "size_bytes": len(content)
+                }
+            )
+            
+            return DocumentResponse(
+                success=True,
+                document_id=doc_id,
+                message=f"File '{filename}' uploaded and vectorized successfully"
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to upload document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -449,7 +546,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.get("/api/documents")
 async def list_documents(limit: int = 10, offset: int = 0):
-    """List documents in the vector store"""
+    """List documents in the vector store, grouping chunks together"""
     global rag_instance
     
     if not rag_instance:
@@ -463,19 +560,71 @@ async def list_documents(limit: int = 10, offset: int = 0):
             SELECT id, content, metadata, created_at 
             FROM {rag_instance.config.rag.documents_table}
             ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
-        """, (limit, offset))
+        """)
         
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
-        documents = [dict(zip(columns, row)) for row in rows]
+        all_docs = [dict(zip(columns, row)) for row in rows]
         
         cursor.close()
         
+        # Group chunks by parent_doc_id
+        grouped_docs = {}
+        standalone_docs = []
+        
+        for doc in all_docs:
+            metadata = doc.get('metadata', {})
+            if isinstance(metadata, str):
+                import json
+                metadata = json.loads(metadata)
+            
+            parent_doc_id = metadata.get('parent_doc_id')
+            chunk_index = metadata.get('chunk_index')
+            
+            # If this is a chunk (has parent_doc_id), group it
+            if parent_doc_id:
+                if parent_doc_id not in grouped_docs:
+                    # Create parent document entry
+                    total_chunks = metadata.get('total_chunks', 1)
+                    filename = metadata.get('filename', 'Untitled')
+                    
+                    grouped_docs[parent_doc_id] = {
+                        'id': parent_doc_id,
+                        'content': f"[Document with {total_chunks} chunks]\n\nFilename: {filename}\n\nThis document was automatically split into {total_chunks} chunks for efficient vectorization. Each chunk is searchable independently.",
+                        'metadata': {
+                            **{k: v for k, v in metadata.items() if k not in ['chunk_index', 'parent_doc_id']},
+                            'is_chunked': True,
+                            'total_chunks': total_chunks,
+                            'chunk_ids': []
+                        },
+                        'created_at': doc['created_at']
+                    }
+                
+                # Add chunk ID to the list
+                grouped_docs[parent_doc_id]['metadata']['chunk_ids'].append({
+                    'id': doc['id'],
+                    'index': chunk_index,
+                    'preview': doc['content'][:150] + '...' if len(doc['content']) > 150 else doc['content']
+                })
+                
+                # Sort chunks by index
+                grouped_docs[parent_doc_id]['metadata']['chunk_ids'].sort(key=lambda x: x['index'])
+            else:
+                # Not a chunk, add as-is
+                standalone_docs.append(doc)
+        
+        # Combine grouped and standalone documents
+        documents = list(grouped_docs.values()) + standalone_docs
+        documents.sort(key=lambda x: x['created_at'], reverse=True)
+        
+        # Apply pagination
+        paginated_docs = documents[offset:offset + limit]
+        
         return {
             "success": True,
-            "documents": documents,
-            "count": len(documents)
+            "documents": paginated_docs,
+            "count": len(paginated_docs),
+            "total": len(documents)
         }
     except Exception as e:
         logger.error(f"Failed to list documents: {str(e)}")
