@@ -1,0 +1,24 @@
+FROM pgvector/pgvector:pg16
+
+# Install dependencies for downloading
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download Pagila database
+RUN mkdir -p /tmp/pagila && cd /tmp/pagila && \
+    wget -q https://github.com/devrimgunduz/pagila/archive/master.tar.gz && \
+    tar -xzf master.tar.gz --strip-components=1 && \
+    rm master.tar.gz
+
+# Download AdventureWorks database
+RUN mkdir -p /tmp/adventureworks && cd /tmp/adventureworks && \
+    wget -q https://github.com/lorint/AdventureWorks-for-Postgres/archive/master.tar.gz && \
+    tar -xzf master.tar.gz --strip-components=1 && \
+    rm master.tar.gz
+
+# Copy initialization script
+COPY init-dataplane.sh /docker-entrypoint-initdb.d/01-init-dataplane.sh
+RUN chmod +x /docker-entrypoint-initdb.d/01-init-dataplane.sh

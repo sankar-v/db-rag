@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { queryAPI } from '../api/client'
+import ActiveContext from '../components/ActiveContext'
 
 interface Message {
   id: string
@@ -237,6 +238,9 @@ export default function ChatInterface() {
             Database not connected. Please configure connection in Settings.
           </div>
         )}
+
+        {/* Active Context Component */}
+        <ActiveContext />
         
         <form onSubmit={handleSubmit} className="flex gap-3">
           <input

@@ -1,0 +1,116 @@
+services:
+  # Control Plane - Metadata Database (Common for all tenants)
+  control-plane-db:
+    image: pgvector/pgvector:pg16
+    container_name: dbrag-control-plane
+    environment:
+      POSTGRES_DB: dbrag_metadata
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5434:5432"
+    volumes:
+      - control_plane_data:/var/lib/postgresql/data
+      - ./docker/metadata-init:/docker-entrypoint-initdb.d
+    networks:
+      - dbrag-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dbrag_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Data Plane - Multiple Tenant Databases (Pagila + AdventureWorks)
+  data-plane-db:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.dataplane
+    container_name: dbrag-data-plane
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5435:5432"
+    volumes:
+      - data_plane_data:/var/lib/postgresql/data
+    networks:
+      - dbrag-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dbrag-backend
+    depends_on:
+      control-plane-db:
+        condition: service_healthy
+      data-plane-db:
+        condition: service_healthy
+    environment:
+      # Control Plane Configuration (Common metadata for all tenants)
+      METADATA_DB_HOST: control-plane-db
+      METADATA_DB_PORT: 5432
+      METADATA_DB_NAME: dbrag_metadata
+      METADATA_DB_USER: postgres
+      METADATA_DB_PASSWORD: postgres
+      USE_METADATA_DB: "true"
+      
+      # Default Data Plane Connection (Users will add via UI)
+      DB_HOST: data-plane-db
+      DB_PORT: 5432
+      DB_NAME: pagila
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      
+      # Default Tenant
+      DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
+      DEFAULT_TENANT_NAME: "Development"
+      
+      # OpenAI Configuration
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    command: python -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - dbrag-network
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dbrag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    working_dir: /app
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - dbrag-network
+
+networks:
+  dbrag-network:
+    driver: bridge
+
+volumes:
+  control_plane_data:
+    name: dbrag_control_plane_data
+  data_plane_data:
+    name: dbrag_data_plane_data

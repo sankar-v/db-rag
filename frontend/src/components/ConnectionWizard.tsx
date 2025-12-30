@@ -56,11 +56,12 @@ export default function ConnectionWizard({ onComplete, onCancel, editConnection 
     onSuccess: (data) => {
       setTestResult(data)
       if (data.success && data.tables) {
+        // Select ALL tables by default
         setAvailableTables(
           data.tables.map((table: string) => ({
             table_name: table,
             schema: formData.schema,
-            selected: true,
+            selected: true,  // All tables selected by default
           }))
         )
       }

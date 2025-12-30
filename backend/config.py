@@ -34,6 +34,33 @@ class DatabaseConfig:
 
 
 @dataclass
+class MetadataDatabaseConfig:
+    """Metadata database configuration (control plane)"""
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    enabled: bool = True  # If False, use in-memory/file-based storage
+    
+    @classmethod
+    def from_env(cls) -> 'MetadataDatabaseConfig':
+        """Load metadata database configuration from environment variables"""
+        return cls(
+            host=os.getenv("METADATA_DB_HOST", os.getenv("DB_HOST", "localhost")),
+            port=int(os.getenv("METADATA_DB_PORT", os.getenv("DB_PORT", "5432"))),
+            database=os.getenv("METADATA_DB_NAME", "dbrag_metadata"),
+            user=os.getenv("METADATA_DB_USER", os.getenv("DB_USER", "postgres")),
+            password=os.getenv("METADATA_DB_PASSWORD", os.getenv("DB_PASSWORD", "")),
+            enabled=os.getenv("USE_METADATA_DB", "true").lower() == "true"
+        )
+    
+    def get_connection_string(self) -> str:
+        """Generate PostgreSQL connection string"""
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+
+
+@dataclass
 class LLMConfig:
     """LLM configuration"""
     provider: str = "openai"  # Future: support anthropic, azure, etc.

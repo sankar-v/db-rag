@@ -123,10 +123,6 @@ class ConnectionRequest(BaseModel):
     schema: str = "public"
 
 
-class SyncTablesRequest(BaseModel):
-    tables: List[str]
-
-
 class SystemStatus(BaseModel):
     status: str
     database_connected: bool
@@ -145,68 +141,6 @@ async def startup_event():
         rag_instance = DBRAG()
         rag_instance.initialize()
         logger.info("DB-RAG system initialized successfully")
-        
-        # If using metadata database, ensure default connection is registered and synced
-        if metadata_db and rag_instance:
-            tenant_id = get_tenant_id()
-            db_config = rag_instance.config.database
-            
-            # Check if connection already exists
-            connections = metadata_db.list_connections(tenant_id)
-            existing_conn = None
-            for conn in connections:
-                if (conn['host'] == db_config.host and 
-                    conn['port'] == db_config.port and 
-                    conn['database_name'] == db_config.database):
-                    existing_conn = conn
-                    break
-            
-            if not existing_conn:
-                # Create default connection entry
-                connection_id = metadata_db.create_connection(
-                    tenant_id=tenant_id,
-                    connection_name=f"{db_config.database} (Default)",
-                    host=db_config.host,
-                    port=db_config.port,
-                    database_name=db_config.database,
-                    username=db_config.user,
-                    password=db_config.password,
-                    schema_name=db_config.schema,
-                    connection_metadata={"auto_synced": True}
-                )
-                logger.info(f"Created default connection entry for {db_config.database}")
-            else:
-                connection_id = existing_conn['connection_id']
-                logger.info(f"Default connection for {db_config.database} already exists")
-            
-            # Sync table metadata to control plane if needed
-            table_count = metadata_db.get_connection_table_count(tenant_id, connection_id)
-            if table_count == 0:
-                logger.info(f"Syncing table metadata to control plane for connection {connection_id}")
-                # Get tables from the old metadata catalog
-                tables = rag_instance.orchestrator.db.get_all_tables()
-                synced_count = 0
-                for table_name in tables:
-                    # Get metadata from old catalog
-                    old_metadata = rag_instance.orchestrator.metadata_catalog.get_table_metadata(table_name)
-                    if old_metadata:
-                        # Map old format to new format and add to control plane catalog
-                        metadata_db.save_table_metadata(
-                            tenant_id=tenant_id,
-                            connection_id=connection_id,
-                            table_name=table_name,
-                            schema_name=db_config.schema,
-                            table_description=old_metadata.get('table_description', ''),
-                            business_context=old_metadata.get('business_context', ''),
-                            column_descriptions={},  # Old format doesn't have detailed column descriptions
-                            sample_values={},
-                            row_count=0,
-                            data_types={},
-                            relationships={}
-                        )
-                        synced_count += 1
-                logger.info(f"Synced {synced_count} tables to control plane")
-                
     except Exception as e:
         logger.error(f"Failed to initialize DB-RAG: {str(e)}")
         # Don't fail startup, allow connection configuration
@@ -617,44 +551,12 @@ async def list_connections():
         if metadata_db:
             # Use metadata database
             connections = metadata_db.list_connections(tenant_id)
-            # Transform to frontend format and add table counts
-            transformed_connections = []
+            # Add table counts
             for conn in connections:
-                # Get actual table count from data plane
-                try:
-                    from config import DatabaseConfig
-                    temp_config = DatabaseConfig(
-                        host=conn['host'],
-                        port=conn['port'],
-                        database=conn['database_name'],
-                        user=conn['username'],
-                        password=conn['password'],
-                        schema='public'
-                    )
-                    temp_db = DatabaseManager(temp_config)
-                    tables = temp_db.get_all_tables()
-                    table_count = len(tables)
-                except Exception as e:
-                    logger.warning(f"Could not get table count for connection {conn['connection_id']}: {e}")
-                    table_count = 0
-                
-                transformed_connections.append({
-                    'id': conn['connection_id'],
-                    'name': conn['connection_name'],
-                    'host': conn['host'],
-                    'port': conn['port'],
-                    'database': conn['database_name'],
-                    'user': conn['username'],
-                    'schema': 'public',  # Default schema
-                    'is_active': conn['is_active'],
-                    'status': 'connected' if conn['is_active'] else 'disconnected',
-                    'tables_count': table_count,
-                    'synced_tables_count': metadata_db.get_connection_table_count(
-                        tenant_id, conn['connection_id']
-                    ),
-                    'created_at': conn['created_at'].isoformat() if conn.get('created_at') else None
-                })
-            return {"success": True, "connections": transformed_connections}
+                conn['tables_count'] = metadata_db.get_connection_table_count(
+                    tenant_id, conn['connection_id']
+                )
+            return {"success": True, "connections": connections}
         else:
             # Fallback to file-based storage
             connections = connection_manager.list_connections()
@@ -780,21 +682,6 @@ async def update_connection(connection_id: str, request: ConnectionCreateRequest
 @app.delete("/api/connections/{connection_id}")
 async def delete_connection(connection_id: str):
     """Delete a connection"""
-    try:
-        tenant_id = get_tenant_id()
-        
-        if metadata_db:
-            # Use metadata database
-            metadata_db.delete_connection(connection_id, tenant_id)
-        else:
-            # Fallback to file-based storage
-            connection_manager.delete_connection(connection_id)
-        
-        return {"success": True, "message": "Connection deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/api/connections/{connection_id}/activate")
 async def activate_connection(connection_id: str):
     """Set a connection as the active connection and reinitialize RAG"""
@@ -838,29 +725,6 @@ async def activate_connection(connection_id: str):
             
             # Create config from connection
             config = Config(
-                host=connection['host'],
-                port=connection['port'],
-                database=connection['database'],
-                user=connection['user'],
-                password=connection['password'],
-                schema=connection.get('schema', 'public')
-            )
-            
-            # Initialize new RAG instance with this connection
-            rag_instance = DBRAG(config)
-            rag_instance.initialize()
-            
-            # Set as active in connection manager
-            connection_manager.set_active_connection(connection_id)
-            
-            return {
-                "success": True,
-                "message": f"Connection '{connection['name']}' is now active"
-            }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/api/connections/{connection_id}/sync")
 async def sync_connection_tables(connection_id: str, request: SyncTablesRequest):
     """Sync metadata for selected tables in a connection"""
@@ -927,6 +791,58 @@ async def sync_connection_tables(connection_id: str, request: SyncTablesRequest)
             "success": True,
             "tables_synced": synced_count,
             "message": f"Synced {synced_count} tables to metadata catalog"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to sync tables: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+            "message": f"Connection '{connection['name']}' is now active"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to activate connection: {str(e)}")
+        connection_manager.update_connection_status(connection_id, 'error')
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SyncTablesRequest(BaseModel):
+    tables: List[str]
+
+
+@app.post("/api/connections/{connection_id}/sync")
+async def sync_connection_tables(connection_id: str, request: SyncTablesRequest):
+    """Sync metadata for selected tables in a connection"""
+    try:
+        connection = connection_manager.get_connection(connection_id)
+        if not connection:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        
+        if not rag_instance:
+            raise HTTPException(status_code=400, detail="No active RAG instance")
+        
+        # Sync the specified tables
+        # This will use the current rag_instance metadata catalog
+        synced_count = 0
+        for table_name in request.tables:
+            try:
+                rag_instance.metadata_catalog.discover_and_add_table(table_name)
+                synced_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to sync table {table_name}: {e}")
+        
+        # Update connection with table count
+        connection_manager.update_connection(
+            connection_id,
+            tables=request.tables
+        )
+        connection_manager.update_tables_count(connection_id, synced_count)
+        
+        return {
+            "success": True,
+            "tables_synced": synced_count,
+            "message": f"Synced {synced_count} tables"
         }
     except HTTPException:
         raise
