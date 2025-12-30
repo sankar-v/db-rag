@@ -183,28 +183,54 @@ async def startup_event():
             table_count = metadata_db.get_connection_table_count(tenant_id, connection_id)
             if table_count == 0:
                 logger.info(f"Syncing table metadata to control plane for connection {connection_id}")
-                # Get tables from the old metadata catalog
-                tables = rag_instance.orchestrator.db.get_all_tables()
+                # Get tables directly from the database
+                tables = rag_instance.orchestrator.db.get_all_tables(
+                    exclude_tables=[rag_instance.config.rag.documents_table]
+                )
                 synced_count = 0
+                
                 for table_name in tables:
-                    # Get metadata from old catalog
-                    old_metadata = rag_instance.orchestrator.metadata_catalog.get_table_metadata(table_name)
-                    if old_metadata:
-                        # Map old format to new format and add to control plane catalog
+                    try:
+                        # Get basic table info from database
+                        conn = rag_instance.orchestrator.db.get_connection()
+                        cursor = conn.cursor()
+                        
+                        # Get column information
+                        cursor.execute(f"""
+                            SELECT column_name, data_type
+                            FROM information_schema.columns
+                            WHERE table_schema = %s AND table_name = %s
+                            ORDER BY ordinal_position
+                        """, (db_config.schema, table_name))
+                        
+                        columns = cursor.fetchall()
+                        column_descriptions = {col[0]: "" for col in columns}
+                        data_types = {col[0]: col[1] for col in columns}
+                        
+                        # Get row count
+                        cursor.execute(f"SELECT COUNT(*) FROM {db_config.schema}.{table_name}")
+                        row_count = cursor.fetchone()[0]
+                        cursor.close()
+                        
+                        # Save to control plane
                         metadata_db.save_table_metadata(
                             tenant_id=tenant_id,
                             connection_id=connection_id,
                             table_name=table_name,
                             schema_name=db_config.schema,
-                            table_description=old_metadata.get('table_description', ''),
-                            business_context=old_metadata.get('business_context', ''),
-                            column_descriptions={},  # Old format doesn't have detailed column descriptions
+                            table_description=f"Table {table_name}",  # Basic description
+                            business_context="",
+                            column_descriptions=column_descriptions,
                             sample_values={},
-                            row_count=0,
-                            data_types={},
+                            row_count=row_count,
+                            data_types=data_types,
                             relationships={}
                         )
                         synced_count += 1
+                        logger.info(f"Synced table: {table_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to sync table {table_name}: {e}")
+                        
                 logger.info(f"Synced {synced_count} tables to control plane")
                 
     except Exception as e:
@@ -244,13 +270,25 @@ async def get_status():
         )
     
     try:
-        # Get table count
-        tables = rag_instance.db_manager.get_all_tables(
-            exclude_tables=[
-                rag_instance.config.rag.metadata_catalog_table,
-                rag_instance.config.rag.documents_table
-            ]
-        )
+        # Get table count from control plane if using metadata DB
+        if metadata_db:
+            tenant_id = get_tenant_id()
+            connections = metadata_db.list_connections(tenant_id)
+            active_connection = next((c for c in connections if c.get('is_active')), None)
+            
+            if active_connection:
+                connection_id = active_connection['connection_id']
+                table_count = metadata_db.get_connection_table_count(tenant_id, connection_id)
+            else:
+                table_count = 0
+            metadata_count = table_count
+        else:
+            # Fallback to counting tables directly from database
+            tables = rag_instance.db_manager.get_all_tables(
+                exclude_tables=[rag_instance.config.rag.documents_table]
+            )
+            table_count = len(tables)
+            metadata_count = table_count
         
         # Get document count
         conn = rag_instance.db_manager.get_connection()
@@ -259,16 +297,10 @@ async def get_status():
         doc_count = cursor.fetchone()[0]
         cursor.close()
         
-        # Check metadata sync
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {rag_instance.config.rag.metadata_catalog_table}")
-        metadata_count = cursor.fetchone()[0]
-        cursor.close()
-        
         return SystemStatus(
             status="ready",
             database_connected=True,
-            tables_count=len(tables),
+            tables_count=table_count,
             documents_count=doc_count,
             metadata_synced=metadata_count > 0
         )
@@ -453,25 +485,61 @@ async def list_documents(limit: int = 10, offset: int = 0):
 # Table metadata endpoints
 @app.get("/api/tables")
 async def list_tables():
-    """List all tables in the database"""
+    """List all tables with metadata from control plane"""
     global rag_instance
     
     if not rag_instance:
         raise HTTPException(status_code=503, detail="DB-RAG system not initialized")
     
     try:
-        tables = rag_instance.db_manager.get_all_tables(
-            exclude_tables=[
-                rag_instance.config.rag.metadata_catalog_table,
-                rag_instance.config.rag.documents_table
-            ]
-        )
-        
-        return {
-            "success": True,
-            "tables": tables,
-            "count": len(tables)
-        }
+        # If using metadata database (multi-tenant), get tables from control plane
+        if metadata_db:
+            tenant_id = get_tenant_id()
+            
+            # Get active connection
+            connections = metadata_db.list_connections(tenant_id)
+            active_connection = next((c for c in connections if c.get('is_active')), None)
+            
+            if not active_connection:
+                # No active connection, return empty list
+                return {
+                    "success": True,
+                    "tables": [],
+                    "count": 0
+                }
+            
+            connection_id = active_connection['connection_id']
+            
+            # Get all table metadata from control plane for active connection
+            tables_metadata = metadata_db.list_table_metadata(tenant_id, connection_id)
+            
+            # Transform to match frontend expectations
+            tables = []
+            for table_meta in tables_metadata:
+                tables.append({
+                    "table_name": table_meta.get("table_name"),
+                    "schema": table_meta.get("schema_name", "public")  # Frontend expects 'schema'
+                })
+            
+            return {
+                "success": True,
+                "tables": tables,
+                "count": len(tables)
+            }
+        else:
+            # Fallback to old behavior for non-multi-tenant setup
+            tables = rag_instance.db_manager.get_all_tables(
+                exclude_tables=[rag_instance.config.rag.documents_table]
+            )
+            
+            # Transform simple list to objects
+            tables_obj = [{"table_name": t, "schema": "public"} for t in tables]
+            
+            return {
+                "success": True,
+                "tables": tables_obj,
+                "count": len(tables_obj)
+            }
     except Exception as e:
         logger.error(f"Failed to list tables: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -479,22 +547,74 @@ async def list_tables():
 
 @app.get("/api/tables/{table_name}")
 async def get_table_metadata(table_name: str):
-    """Get metadata for a specific table"""
+    """Get metadata for a specific table from control plane"""
     global rag_instance
     
     if not rag_instance:
         raise HTTPException(status_code=503, detail="DB-RAG system not initialized")
     
     try:
-        metadata = rag_instance.orchestrator.metadata_manager.get_table_metadata(table_name)
-        
-        if not metadata:
-            raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found")
-        
-        return {
-            "success": True,
-            "metadata": metadata
-        }
+        # If using metadata database (multi-tenant), get from control plane
+        if metadata_db:
+            tenant_id = get_tenant_id()
+            
+            # Get active connection
+            connections = metadata_db.list_connections(tenant_id)
+            active_connection = next((c for c in connections if c.get('is_active')), None)
+            
+            if not active_connection:
+                raise HTTPException(status_code=404, detail="No active connection found")
+            
+            connection_id = active_connection['connection_id']
+            
+            # Get metadata from control plane
+            metadata = metadata_db.get_table_metadata(tenant_id, connection_id, table_name)
+            
+            if not metadata:
+                raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found")
+            
+            # Transform to match frontend expectations
+            transformed_metadata = {
+                "table_name": metadata.get("table_name"),
+                "description": metadata.get("table_description", ""),
+                "columns": [],
+                "sample_data": []
+            }
+            
+            # Parse column descriptions and data types
+            column_descriptions = metadata.get("column_descriptions", {})
+            data_types = metadata.get("data_types", {})
+            
+            if isinstance(column_descriptions, str):
+                import json
+                column_descriptions = json.loads(column_descriptions)
+            if isinstance(data_types, str):
+                import json
+                data_types = json.loads(data_types)
+            
+            # Build columns array
+            for col_name, description in column_descriptions.items():
+                transformed_metadata["columns"].append({
+                    "column_name": col_name,
+                    "data_type": data_types.get(col_name, "unknown"),
+                    "description": description
+                })
+            
+            return {
+                "success": True,
+                "metadata": transformed_metadata
+            }
+        else:
+            # Fallback to old behavior
+            metadata = rag_instance.orchestrator.metadata_manager.get_table_metadata(table_name)
+            
+            if not metadata:
+                raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found")
+            
+            return {
+                "success": True,
+                "metadata": metadata
+            }
     except HTTPException:
         raise
     except Exception as e:
@@ -809,15 +929,19 @@ async def activate_connection(connection_id: str):
             if not connection:
                 raise HTTPException(status_code=404, detail="Connection not found")
             
-            # Create config from connection
-            config = Config(
-                host=connection['host'],
-                port=connection['port'],
-                database=connection['database_name'],
-                user=connection['username'],
-                password=connection['password_encrypted'],
+            # Create database config from connection
+            db_config = DatabaseConfig(
+                host=connection['db_host'],
+                port=connection['db_port'],
+                database=connection['db_name'],
+                user=connection['db_user'],
+                password=connection['db_password_encrypted'],
                 schema=connection['schema_name']
             )
+            
+            # Create new config with this database
+            config = Config()
+            config.database = db_config
             
             # Initialize new RAG instance with this connection
             rag_instance = DBRAG(config)

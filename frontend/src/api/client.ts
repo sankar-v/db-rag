@@ -86,19 +86,34 @@ export const documentAPI = {
   },
 }
 
-export const tableAPI = {
-  list: async (): Promise<Table[]> => {
+export const metadataAPI = {
+  listTables: async (): Promise<Table[]> => {
     const response = await api.get('/api/tables')
     return response.data.tables
   },
 
-  getMetadata: async (tableName: string): Promise<TableMetadata> => {
+  getTableMetadata: async (tableName: string): Promise<TableMetadata> => {
     const response = await api.get(`/api/tables/${tableName}`)
     return response.data.metadata
   },
 
   syncMetadata: async (forceUpdate = false): Promise<void> => {
     await api.post('/api/metadata/sync', null, { params: { force_update: forceUpdate } })
+  },
+}
+
+// Deprecated: Use metadataAPI instead
+export const tableAPI = {
+  list: async (): Promise<Table[]> => {
+    return metadataAPI.listTables()
+  },
+
+  getMetadata: async (tableName: string): Promise<TableMetadata> => {
+    return metadataAPI.getTableMetadata(tableName)
+  },
+
+  syncMetadata: async (forceUpdate = false): Promise<void> => {
+    return metadataAPI.syncMetadata(forceUpdate)
   },
 }
 
