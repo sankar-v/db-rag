@@ -1,12 +1,19 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Database, Search, Loader2, RefreshCw, Table2 } from 'lucide-react'
-import { metadataAPI } from '../api/client'
+import { Database, Search, Loader2, RefreshCw, Table2, ChevronDown, ChevronRight } from 'lucide-react'
+import { metadataAPI, connectionAPI } from '../api/client'
 
 export default function MetadataExplorer() {
   const [selectedTableName, setSelectedTableName] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [expandedDatabases, setExpandedDatabases] = useState<Set<string>>(new Set())
   const queryClient = useQueryClient()
+
+  // Get all connections
+  const { data: connections } = useQuery({
+    queryKey: ['connections'],
+    queryFn: connectionAPI.list,
+  })
 
   // Get all metadata tables
   const { data: tables, isLoading } = useQuery({
@@ -29,19 +36,61 @@ export default function MetadataExplorer() {
     enabled: !!selectedTableName,
   })
 
-  // Auto-select first table if none selected
-  const selectedTable = tables?.find(t => t.table_name === selectedTableName) || tables?.[0]
-  if (tables && tables.length > 0 && !selectedTableName) {
-    setSelectedTableName(tables[0].table_name)
-  }
+  // Group tables by database (using connection info from metadata)
+  const groupedTables = tables?.reduce((acc: any, table: any) => {
+    // Find the connection for this table (tables come from active connection)
+    const activeConnection = connections?.find((c: any) => c.is_active)
+    const dbName = activeConnection?.database || 'Unknown Database'
+    
+    if (!acc[dbName]) {
+      acc[dbName] = {
+        connection: activeConnection,
+        tables: []
+      }
+    }
+    acc[dbName].tables.push(table)
+    return acc
+  }, {}) || {}
 
-  const filteredTables = tables?.filter((table) =>
-    table?.table_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Filter tables across all databases
+  const filteredGroupedTables = Object.entries(groupedTables).reduce((acc: any, [dbName, data]: any) => {
+    const filteredTables = data.tables.filter((table: any) =>
+      table?.table_name?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    if (filteredTables.length > 0) {
+      acc[dbName] = { ...data, tables: filteredTables }
+    }
+    return acc
+  }, {})
+
+  // Auto-expand first database and select first table (only once when data loads)
+  useEffect(() => {
+    if (Object.keys(filteredGroupedTables).length > 0 && expandedDatabases.size === 0) {
+      const firstDb = Object.keys(filteredGroupedTables)[0]
+      setExpandedDatabases(new Set([firstDb]))
+      if (!selectedTableName && filteredGroupedTables[firstDb].tables.length > 0) {
+        setSelectedTableName(filteredGroupedTables[firstDb].tables[0].table_name)
+      }
+    }
+  }, [tables]) // Only run when tables data changes
+
+  const toggleDatabase = (dbName: string) => {
+    setExpandedDatabases(prev => {
+      const newExpanded = new Set(prev)
+      if (newExpanded.has(dbName)) {
+        newExpanded.delete(dbName)
+      } else {
+        newExpanded.add(dbName)
+      }
+      return newExpanded
+    })
+  }
 
   const handleSelectTable = (tableName: string) => {
     setSelectedTableName(tableName)
   }
+
+  const totalTables = Object.values(filteredGroupedTables).reduce((sum: number, data: any) => sum + data.tables.length, 0)
 
   return (
     <div className="flex flex-col h-full bg-slate-900">
@@ -95,7 +144,7 @@ export default function MetadataExplorer() {
             </div>
 
             <h3 className="text-sm font-semibold text-slate-400 uppercase mb-3">
-              Metadata Tables ({filteredTables?.length || 0})
+              Databases & Tables ({totalTables} tables)
             </h3>
 
             {isLoading ? (
@@ -103,38 +152,67 @@ export default function MetadataExplorer() {
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Loading metadata...
               </div>
-            ) : filteredTables && filteredTables.length > 0 ? (
-              <div className="space-y-1">
-                {filteredTables.map((table) => {
-                  const isSelected = table.table_name === selectedTableName
-
-                  return (
+            ) : Object.keys(filteredGroupedTables).length > 0 ? (
+              <div className="space-y-2">
+                {Object.entries(filteredGroupedTables).map(([dbName, data]: any) => (
+                  <div key={dbName} className="border border-slate-700 rounded-lg overflow-hidden">
+                    {/* Database Header */}
                     <button
-                      key={table.table_name}
-                      onClick={() => handleSelectTable(table.table_name)}
-                      className={`w-full flex items-start gap-3 p-3 rounded-lg transition-colors text-left ${
-                        isSelected
-                          ? 'bg-primary-600/20 border border-primary-500'
-                          : 'hover:bg-slate-700 border border-transparent'
-                      }`}
+                      onClick={() => toggleDatabase(dbName)}
+                      className="w-full flex items-center gap-2 p-3 bg-slate-700/50 hover:bg-slate-700 transition-colors"
                     >
-                      <Table2 className={`w-5 h-5 flex-shrink-0 ${isSelected ? 'text-primary-400' : 'text-slate-400'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isSelected ? 'text-white' : 'text-slate-300'}`}>
-                          {table.table_name}
-                        </div>
-                        <div className="text-xs text-slate-500 truncate">
-                          {table.schema}
+                      {expandedDatabases.has(dbName) ? (
+                        <ChevronDown className="w-4 h-4 text-slate-400" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-slate-400" />
+                      )}
+                      <Database className="w-5 h-5 text-primary-400" />
+                      <div className="flex-1 text-left">
+                        <div className="text-sm font-semibold text-white">{dbName}</div>
+                        <div className="text-xs text-slate-400">
+                          {data.tables.length} {data.tables.length === 1 ? 'table' : 'tables'}
+                          {data.connection?.host && ` • ${data.connection.host}`}
                         </div>
                       </div>
                     </button>
-                  )
-                })}
+
+                    {/* Tables List */}
+                    {expandedDatabases.has(dbName) && (
+                      <div className="bg-slate-800/50">
+                        {data.tables.map((table: any) => {
+                          const isSelected = table.table_name === selectedTableName
+
+                          return (
+                            <button
+                              key={table.table_name}
+                              onClick={() => handleSelectTable(table.table_name)}
+                              className={`w-full flex items-start gap-3 p-3 pl-10 transition-colors text-left border-l-2 ${
+                                isSelected
+                                  ? 'bg-primary-600/20 border-primary-500'
+                                  : 'hover:bg-slate-700/50 border-transparent'
+                              }`}
+                            >
+                              <Table2 className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isSelected ? 'text-primary-400' : 'text-slate-400'}`} />
+                              <div className="flex-1 min-w-0">
+                                <div className={`text-sm font-medium truncate ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                                  {table.table_name}
+                                </div>
+                                <div className="text-xs text-slate-500 truncate">
+                                  {table.schema}
+                                </div>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="text-center py-8">
-                <Table2 className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-400 text-sm mb-4">No metadata tables found</p>
+                <Database className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-400 text-sm mb-4">No metadata found</p>
                 <p className="text-slate-500 text-xs">Sync metadata from your connections</p>
               </div>
             )}
@@ -143,7 +221,7 @@ export default function MetadataExplorer() {
 
         {/* Right Panel - Table Metadata Details */}
         <div className="flex-1 overflow-y-auto p-6">
-          {selectedTable && tableMetadata ? (
+          {selectedTableName && tableMetadata ? (
             <div className="max-w-4xl">
               {/* Table Header */}
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
@@ -153,10 +231,10 @@ export default function MetadataExplorer() {
                   </div>
                   <div className="flex-1">
                     <h3 className="text-2xl font-bold text-white mb-2">
-                      {selectedTable.table_name}
+                      {selectedTableName}
                     </h3>
                     <div className="flex items-center gap-4 text-sm text-slate-400">
-                      <span>Schema: {selectedTable.schema}</span>
+                      <span>Schema: {tableMetadata.schema || 'public'}</span>
                       {tableMetadata.columns && (
                         <span>• {tableMetadata.columns.length} columns</span>
                       )}

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Database, FileText, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useContextStore } from '../store/contextStore'
-import { connectionAPI, documentAPI } from '../api/client'
+import { connectionAPI, documentAPI, metadataAPI } from '../api/client'
 
 export default function ActiveContext() {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -18,8 +18,16 @@ export default function ActiveContext() {
     queryFn: () => documentAPI.list(100, 0),
   })
 
+  const { data: tables } = useQuery({
+    queryKey: ['tables'],
+    queryFn: metadataAPI.listTables,
+  })
+
   const selectedConnections = connections?.filter((c) => selectedConnectionIds.includes(c.id)) || []
   const selectedDocuments = documents?.filter((d) => selectedDocumentIds.includes(d.id)) || []
+  
+  // Count tables from selected connections
+  const tableCount = tables?.length || 0
 
   const totalSelected = selectedConnectionIds.length + selectedDocumentIds.length
 
@@ -42,23 +50,23 @@ export default function ActiveContext() {
           onClick={() => setIsExpanded(!isExpanded)}
           className="flex-1 flex items-center gap-3 text-left hover:text-white transition-colors"
         >
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 text-sm text-slate-400">
             {selectedConnectionIds.length > 0 && (
-              <div className="flex items-center gap-2 text-primary-400">
-                <Database className="w-4 h-4" />
-                <span className="text-sm font-medium">{selectedConnectionIds.length}</span>
-              </div>
+              <span>
+                <span className="text-primary-400 font-medium">{selectedConnectionIds.length}</span> {selectedConnectionIds.length === 1 ? 'connection' : 'connections'}
+              </span>
+            )}
+            {selectedConnectionIds.length > 0 && tableCount > 0 && (
+              <span>
+                • <span className="text-primary-400 font-medium">{tableCount}</span> {tableCount === 1 ? 'table' : 'tables'}
+              </span>
             )}
             {selectedDocumentIds.length > 0 && (
-              <div className="flex items-center gap-2 text-green-400">
-                <FileText className="w-4 h-4" />
-                <span className="text-sm font-medium">{selectedDocumentIds.length}</span>
-              </div>
+              <span>
+                • <span className="text-green-400 font-medium">{selectedDocumentIds.length}</span> {selectedDocumentIds.length === 1 ? 'document' : 'documents'}
+              </span>
             )}
           </div>
-          <span className="text-sm text-slate-400">
-            {totalSelected} {totalSelected === 1 ? 'item' : 'items'} in context
-          </span>
           {isExpanded ? (
             <ChevronUp className="w-4 h-4 text-slate-400" />
           ) : (

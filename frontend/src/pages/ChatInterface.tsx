@@ -94,16 +94,11 @@ export default function ChatInterface() {
           </div>
 
           {/* System Status */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${status?.database_connected ? 'bg-green-500' : 'bg-red-500'}`} />
-              <span className="text-sm text-slate-400">
-                {status?.database_connected ? 'Connected' : 'Disconnected'}
-              </span>
-            </div>
-            <div className="text-sm text-slate-400">
-              {status?.tables_count || 0} tables
-            </div>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${status?.database_connected ? 'bg-green-500' : 'bg-red-500'}`} />
+            <span className="text-sm text-slate-400">
+              {status?.database_connected ? 'Connected' : 'Disconnected'}
+            </span>
           </div>
         </div>
 
