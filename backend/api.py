@@ -340,6 +340,99 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Query suggestions endpoint
+class SuggestionRequest(BaseModel):
+    partial_query: str
+    context: Optional[Dict[str, Any]] = None  # Selected connections, tables, etc.
+
+
+class SuggestionItem(BaseModel):
+    text: str
+    type: str  # 'completion', 'refinement', 'template'
+    confidence: float
+    description: Optional[str] = None
+
+
+class SuggestionsResponse(BaseModel):
+    suggestions: List[SuggestionItem]
+
+
+@app.post("/api/query/suggestions", response_model=SuggestionsResponse)
+async def get_query_suggestions(request: SuggestionRequest):
+    """Get AI-powered query suggestions based on partial input"""
+    global rag_instance
+    
+    if not rag_instance:
+        # Return basic suggestions even without DB connection
+        return SuggestionsResponse(suggestions=[])
+    
+    try:
+        # Get database schema context
+        schema_context = ""
+        if rag_instance and hasattr(rag_instance, 'orchestrator') and rag_instance.orchestrator:
+            if hasattr(rag_instance.orchestrator, 'sql_agent') and rag_instance.orchestrator.sql_agent:
+                if hasattr(rag_instance.orchestrator.sql_agent, 'metadata_catalog'):
+                    metadata_catalog = rag_instance.orchestrator.sql_agent.metadata_catalog
+                    if metadata_catalog:
+                        tables = metadata_catalog.get_all_table_names()
+                        if tables:
+                            schema_context = f"Available tables: {', '.join(tables[:15])}"
+        
+        # Build prompt for OpenAI to generate suggestions
+        prompt = f"""Given a partial database query: "{request.partial_query}"
+
+{schema_context}
+
+Suggest 3-5 completions or refinements for this query. Consider:
+1. Natural language queries about the data
+2. Common SQL patterns (SELECT, JOIN, WHERE, GROUP BY, etc.)
+3. Data exploration questions
+4. Aggregations and analysis
+
+Return suggestions as a JSON array with format:
+[{{"text": "suggestion text", "type": "completion|refinement|template", "confidence": 0.0-1.0, "description": "why this helps"}}]
+
+Keep suggestions concise and practical."""
+
+        # Call OpenAI for intelligent suggestions
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Faster model for suggestions
+            messages=[
+                {"role": "system", "content": "You are a database query assistant. Generate helpful query suggestions."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500,
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse suggestions
+        import json
+        result = json.loads(response.choices[0].message.content)
+        suggestions = result.get("suggestions", [])
+        
+        # Convert to SuggestionItem objects
+        suggestion_items = [
+            SuggestionItem(
+                text=s.get("text", ""),
+                type=s.get("type", "completion"),
+                confidence=s.get("confidence", 0.5),
+                description=s.get("description")
+            )
+            for s in suggestions[:5]  # Limit to 5
+        ]
+        
+        return SuggestionsResponse(suggestions=suggestion_items)
+        
+    except Exception as e:
+        logger.error(f"Error generating suggestions: {str(e)}")
+        # Return empty suggestions on error
+        return SuggestionsResponse(suggestions=[])
+
+
 # WebSocket for real-time chat
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):

@@ -52,6 +52,17 @@ export interface TableMetadata {
   sample_data: any[]
 }
 
+export interface SuggestionItem {
+  text: string
+  type: 'completion' | 'refinement' | 'template'
+  confidence: number
+  description?: string
+}
+
+export interface SuggestionsResponse {
+  suggestions: SuggestionItem[]
+}
+
 // API functions
 export const queryAPI = {
   query: async (request: QueryRequest): Promise<QueryResponse> => {
@@ -61,6 +72,14 @@ export const queryAPI = {
 
   getStatus: async (): Promise<SystemStatus> => {
     const response = await api.get('/api/status')
+    return response.data
+  },
+
+  getSuggestions: async (partialQuery: string, context?: any): Promise<SuggestionsResponse> => {
+    const response = await api.post('/api/query/suggestions', {
+      partial_query: partialQuery,
+      context,
+    })
     return response.data
   },
 }

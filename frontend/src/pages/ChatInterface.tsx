@@ -6,6 +6,9 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { queryAPI } from '../api/client'
 import ActiveContext from '../components/ActiveContext'
+import AutocompleteDropdown from '../components/AutocompleteDropdown'
+import { useAutocomplete } from '../hooks/useAutocomplete'
+import type { Suggestion } from '../hooks/useAutocomplete'
 
 interface Message {
   id: string
@@ -23,7 +26,17 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [queryMode, setQueryMode] = useState<'auto' | 'sql' | 'vector'>('auto')
+  const [showAutocomplete, setShowAutocomplete] = useState(false)
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const inputContainerRef = useRef<HTMLDivElement>(null)
+
+  // Autocomplete
+  const { suggestions, isLoading: isSuggestionsLoading, saveToHistory } = useAutocomplete(
+    input,
+    showAutocomplete
+  )
 
   // Get system status
   const { data: status } = useQuery({
@@ -73,8 +86,102 @@ export default function ChatInterface() {
 
     setMessages((prev) => [...prev, userMessage])
     queryMutation.mutate({ question: input, mode: queryMode })
+    saveToHistory(input) // Save to query history
     setInput('')
+    setShowAutocomplete(false)
   }
+
+  // Handle suggestion selection
+  const handleSelectSuggestion = (suggestion: Suggestion) => {
+    const textToInsert = suggestion.insertText || suggestion.text
+    
+    // Smart insertion based on suggestion type
+    if (suggestion.type === 'table' || suggestion.type === 'column') {
+      // For tables/columns, intelligently insert at cursor or append
+      const currentInput = input.trim()
+      
+      // If input ends with preposition or incomplete phrase, append
+      if (currentInput.match(/(from|join|in|table|into|where|and|or)$/i)) {
+        setInput(`${currentInput} ${textToInsert}`)
+      } 
+      // If input contains the table mention already, replace just that word
+      else if (currentInput.toLowerCase().includes(textToInsert.toLowerCase())) {
+        setInput(currentInput)
+      }
+      // Otherwise, intelligently insert
+      else {
+        // Check if we're in the middle of a query template
+        const templates = ['Show me', 'What', 'Count', 'Find', 'List', 'How many']
+        const startsWithTemplate = templates.some(t => currentInput.startsWith(t))
+        
+        if (startsWithTemplate) {
+          // Append to the query
+          setInput(`${currentInput} ${textToInsert}`)
+        } else {
+          // Start fresh with a template
+          setInput(`Show me data from ${textToInsert}`)
+        }
+      }
+    } else if (suggestion.type === 'template') {
+      // For templates, replace or use as-is
+      setInput(textToInsert)
+    } else if (suggestion.type === 'history') {
+      // For history, replace entirely
+      setInput(textToInsert)
+    } else {
+      // Default behavior
+      setInput(textToInsert)
+    }
+    
+    setShowAutocomplete(false)
+    inputRef.current?.focus()
+  }
+
+  // Handle keyboard navigation
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showAutocomplete || suggestions.length === 0) {
+      // Show autocomplete on key press if not visible
+      if (e.key !== 'Enter' && e.key !== 'Escape') {
+        setShowAutocomplete(true)
+      }
+      return
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setSelectedSuggestionIndex((prev) => 
+          prev < suggestions.length - 1 ? prev + 1 : prev
+        )
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setSelectedSuggestionIndex((prev) => (prev > 0 ? prev - 1 : 0))
+        break
+      case 'Enter':
+        if (suggestions[selectedSuggestionIndex]) {
+          e.preventDefault()
+          handleSelectSuggestion(suggestions[selectedSuggestionIndex])
+        }
+        break
+      case 'Escape':
+        e.preventDefault()
+        setShowAutocomplete(false)
+        setSelectedSuggestionIndex(0)
+        break
+      case 'Tab':
+        if (suggestions[selectedSuggestionIndex]) {
+          e.preventDefault()
+          handleSelectSuggestion(suggestions[selectedSuggestionIndex])
+        }
+        break
+    }
+  }
+
+  // Reset selection index when suggestions change
+  useEffect(() => {
+    setSelectedSuggestionIndex(0)
+  }, [suggestions])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -237,15 +344,40 @@ export default function ChatInterface() {
         {/* Active Context Component */}
         <ActiveContext />
         
-        <form onSubmit={handleSubmit} className="flex gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask a question..."
-            disabled={queryMutation.isPending || !status?.database_connected}
-            className="flex-1 bg-slate-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          />
+        <form onSubmit={handleSubmit} className="flex gap-3 relative">
+          <div ref={inputContainerRef} className="flex-1 relative">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value)
+                setShowAutocomplete(true)
+              }}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setShowAutocomplete(true)}
+              placeholder="Ask a question..."
+              disabled={queryMutation.isPending || !status?.database_connected}
+              className="w-full bg-slate-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            
+            {/* Autocomplete Dropdown */}
+            {showAutocomplete && suggestions.length > 0 && inputContainerRef.current && (
+              <div className="absolute bottom-full left-0 right-0 mb-2 z-50">
+                <AutocompleteDropdown
+                  suggestions={suggestions}
+                  selectedIndex={selectedSuggestionIndex}
+                  onSelect={handleSelectSuggestion}
+                  onClose={() => {
+                    setShowAutocomplete(false)
+                    setSelectedSuggestionIndex(0)
+                  }}
+                  position={undefined}
+                />
+              </div>
+            )}
+          </div>
+          
           <button
             type="submit"
             disabled={queryMutation.isPending || !input.trim() || !status?.database_connected}

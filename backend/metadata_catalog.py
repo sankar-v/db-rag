@@ -270,6 +270,7 @@ SAMPLE_QUESTIONS: [question 1] | [question 2] | [question 3]
         cursor = conn.cursor()
         
         try:
+            # First try: Vector similarity search with a reasonable threshold
             cursor.execute(f"""
                 SELECT 
                     table_name,
@@ -279,12 +280,60 @@ SAMPLE_QUESTIONS: [question 1] | [question 2] | [question 3]
                     sample_queries,
                     1 - (description_embedding <=> %s::vector) as similarity
                 FROM {self.catalog_table}
+                WHERE 1 - (description_embedding <=> %s::vector) > 0.3
                 ORDER BY description_embedding <=> %s::vector
                 LIMIT %s
-            """, (query_embedding, query_embedding, max_tables))
+            """, (query_embedding, query_embedding, query_embedding, max_tables))
             
             columns = [desc[0] for desc in cursor.description]
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            # Fallback: If no results from vector search, try keyword matching
+            if len(results) == 0:
+                logger.info("Vector search returned 0 results, trying keyword matching fallback")
+                
+                # Extract potential table names from query (simple keyword matching)
+                query_lower = user_query.lower()
+                cursor.execute(f"""
+                    SELECT 
+                        table_name,
+                        table_description,
+                        business_context,
+                        column_definitions,
+                        sample_queries,
+                        0.5 as similarity
+                    FROM {self.catalog_table}
+                    WHERE 
+                        LOWER(table_name) LIKE %s OR
+                        LOWER(table_description) LIKE %s OR
+                        LOWER(business_context) LIKE %s OR
+                        LOWER(column_definitions::text) LIKE %s
+                    LIMIT %s
+                """, (
+                    f'%{query_lower}%',
+                    f'%{query_lower}%', 
+                    f'%{query_lower}%',
+                    f'%{query_lower}%',
+                    max_tables
+                ))
+                
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                
+                # If still no results, return all tables (let LLM decide)
+                if len(results) == 0:
+                    logger.warning("Keyword matching also failed, returning all tables")
+                    cursor.execute(f"""
+                        SELECT 
+                            table_name,
+                            table_description,
+                            business_context,
+                            column_definitions,
+                            sample_queries,
+                            0.3 as similarity
+                        FROM {self.catalog_table}
+                        LIMIT %s
+                    """, (max_tables,))
+                    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
             logger.info(f"Found {len(results)} relevant tables for query")
             return results
