@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Upload, FileText, Trash2, Loader2, Plus, Calendar, File, CheckCircle, AlertCircle } from 'lucide-react'
+import { Upload, FileText, Trash2, Loader2, Plus, Calendar, File, CheckCircle, AlertCircle, X, Package } from 'lucide-react'
 import { documentAPI } from '../api/client'
 import { useContextStore } from '../store/contextStore'
 
@@ -13,6 +13,7 @@ interface UploadStatus {
 }
 
 export default function DocumentManager() {
+  const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadMode, setUploadMode] = useState<'text' | 'file'>('file')
   const [textContent, setTextContent] = useState('')
   const [isDragging, setIsDragging] = useState(false)
@@ -169,20 +170,11 @@ export default function DocumentManager() {
           </div>
 
           <button
-            onClick={() => setUploadMode(uploadMode === 'file' ? 'text' : 'file')}
+            onClick={() => setShowUploadModal(true)}
             className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 flex items-center gap-2"
           >
-            {uploadMode === 'file' ? (
-              <>
-                <Plus className="w-5 h-5" />
-                Add Text
-              </>
-            ) : (
-              <>
-                <Upload className="w-5 h-5" />
-                Upload File
-              </>
-            )}
+            <Upload className="w-5 h-5" />
+            Upload Document
           </button>
         </div>
       </div>
@@ -242,7 +234,8 @@ export default function DocumentManager() {
                 {documents.map((doc) => {
                   const isSelected = doc.id === selectedDocId
                   const isInContext = selectedDocumentIds.includes(doc.id)
-                  const filename = doc.metadata?.filename || 'Untitled Document'
+                  const metadata = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata) : doc.metadata
+                  const filename = metadata?.filename || 'Untitled Document'
                   const preview = doc.content.substring(0, 60) + (doc.content.length > 60 ? '...' : '')
 
                   return (
@@ -290,250 +283,328 @@ export default function DocumentManager() {
               <div className="text-center py-8">
                 <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                 <p className="text-slate-400 text-sm mb-4">No documents yet</p>
-                <p className="text-slate-500 text-xs">Upload your first document</p>
+                <button
+                  onClick={() => setShowUploadModal(true)}
+                  className="text-primary-400 text-sm hover:text-primary-300"
+                >
+                  Upload your first document
+                </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* Right Panel - Upload Area or Document Details */}
+        {/* Right Panel - Document Details */}
         <div className="flex-1 overflow-y-auto p-6">
-          {!selectedDoc || uploadMode ? (
-            /* Upload Section */
+          {selectedDoc ? (
             <div className="max-w-4xl">
-              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-                <h3 className="text-lg font-semibold text-white mb-4">Add New Document</h3>
-
-                {/* Mode Selector */}
-                <div className="flex gap-2 mb-6">
-                  <button
-                    onClick={() => setUploadMode('file')}
-                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                      uploadMode === 'file'
-                        ? 'bg-primary-600 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }`}
-                  >
-                    <Upload className="w-4 h-4" />
-                    Upload Files
-                  </button>
-                  <button
-                    onClick={() => setUploadMode('text')}
-                    className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                      uploadMode === 'text'
-                        ? 'bg-primary-600 text-white'
-                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }`}
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Text
-                  </button>
-                </div>
-
-                {/* File Upload */}
-                {uploadMode === 'file' && (
-                  <div className="space-y-4">
-                    <div
-                      onDragOver={(e) => {
-                        e.preventDefault()
-                        setIsDragging(true)
-                      }}
-                      onDragLeave={() => setIsDragging(false)}
-                      onDrop={handleDrop}
-                      className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors ${
-                        isDragging
-                          ? 'border-primary-500 bg-primary-500/10'
-                          : 'border-slate-600 hover:border-slate-500'
-                      }`}
-                    >
-                      <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-                      <p className="text-white mb-2">
-                        Drag and drop files here, or click to select
-                      </p>
-                      <p className="text-sm text-slate-400 mb-4">
-                        Supports PDF, TXT, MD, CSV, JSON, XML files
-                      </p>
-                      <input
-                        type="file"
-                        multiple
-                        onChange={(e) => handleFileSelect(e.target.files)}
-                        className="hidden"
-                        id="file-upload"
-                        accept=".txt,.md,.pdf,.csv,.json,.xml"
-                      />
-                      <label
-                        htmlFor="file-upload"
-                        className="bg-slate-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-slate-500 inline-block"
-                      >
-                        Select Files
-                      </label>
-                    </div>
-
-                    {/* Selected Files Display */}
-                    {selectedFiles.length > 0 && (
-                      <div className="bg-slate-700 rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm font-medium text-white">
-                            Selected Files ({selectedFiles.length})
-                          </h4>
-                          <button
-                            onClick={() => setSelectedFiles([])}
-                            className="text-xs text-slate-400 hover:text-white"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                        <div className="space-y-2 mb-4">
-                          {selectedFiles.map((file, idx) => (
-                            <div
-                              key={idx}
-                              className="flex items-center gap-2 text-sm bg-slate-800 rounded p-2"
-                            >
-                              <File className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                              <span className="text-white flex-1 truncate">{file.name}</span>
-                              <span className="text-slate-400 text-xs">
-                                {(file.size / 1024).toFixed(1)} KB
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                        <button
-                          onClick={handleUploadClick}
-                          disabled={uploadFileMutation.isPending}
-                          className="w-full bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 disabled:bg-slate-600 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium"
-                        >
-                          {uploadFileMutation.isPending ? (
-                            <>
-                              <Loader2 className="w-5 h-5 animate-spin" />
-                              Uploading and vectorizing...
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="w-5 h-5" />
-                              Upload {selectedFiles.length} {selectedFiles.length === 1 ? 'File' : 'Files'}
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Text Upload */}
-                {uploadMode === 'text' && (
-                  <form onSubmit={handleTextSubmit} className="space-y-4">
-                    <textarea
-                      value={textContent}
-                      onChange={(e) => setTextContent(e.target.value)}
-                      placeholder="Paste or type your document content here..."
-                      className="w-full h-96 bg-slate-700 text-white rounded-lg p-4 focus:outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!textContent.trim() || addTextMutation.isPending}
-                      className="bg-primary-600 text-white px-6 py-2 rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {addTextMutation.isPending ? (
-                        <>
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="w-5 h-5" />
-                          Add Document
-                        </>
-                      )}
-                    </button>
-                  </form>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Document Details */
-            <div className="max-w-4xl">
+              {/* Document Header */}
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-                <div className="flex items-start justify-between mb-6">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-green-500/10 rounded-lg">
-                      <FileText className="w-8 h-8 text-green-500" />
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-start gap-4">
+                    <div className="bg-primary-600/20 rounded-lg p-3">
+                      <FileText className="w-8 h-8 text-primary-400" />
                     </div>
                     <div>
-                      <h3 className="text-2xl font-bold text-white mb-1">
-                        {selectedDoc.metadata?.filename || 'Untitled Document'}
+                      <h3 className="text-xl font-semibold text-white mb-1">
+                        {(() => {
+                          const metadata = typeof selectedDoc.metadata === 'string' 
+                            ? JSON.parse(selectedDoc.metadata) 
+                            : selectedDoc.metadata
+                          return metadata?.filename || 'Untitled Document'
+                        })()}
                       </h3>
-                      <p className="text-slate-400 flex items-center gap-2">
-                        <Calendar className="w-4 h-4" />
-                        Added on {new Date(selectedDoc.created_at).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                      <p className="text-slate-400 text-sm">
+                        Uploaded {new Date(selectedDoc.created_at).toLocaleDateString()}
                       </p>
                     </div>
                   </div>
                   <button
                     onClick={() => handleDeleteDocument(selectedDoc.id)}
-                    className="text-slate-400 hover:text-red-400 p-2 rounded-lg hover:bg-slate-700 transition-colors"
+                    className="text-red-400 hover:text-red-300 p-2"
                     title="Delete document"
                   >
                     <Trash2 className="w-5 h-5" />
                   </button>
                 </div>
 
-                {/* Vectorization Status */}
-                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="w-5 h-5 text-green-400" />
-                    <div>
-                      <div className="text-green-400 font-medium mb-1">
-                        Document Vectorized
-                      </div>
-                      <div className="text-sm text-green-300/70">
-                        This document has been processed and is ready for semantic search
-                      </div>
-                    </div>
-                  </div>
+                {/* Metadata Grid */}
+                <div className="grid grid-cols-2 gap-4">
+                  {(() => {
+                    const metadata = typeof selectedDoc.metadata === 'string' 
+                      ? JSON.parse(selectedDoc.metadata) 
+                      : selectedDoc.metadata
+                    
+                    return (
+                      <>
+                        <div className="bg-slate-700/50 rounded p-3">
+                          <div className="text-xs text-slate-400 mb-1">Source</div>
+                          <div className="text-sm text-white">{metadata?.source || 'Unknown'}</div>
+                        </div>
+                        <div className="bg-slate-700/50 rounded p-3">
+                          <div className="text-xs text-slate-400 mb-1">File Type</div>
+                          <div className="text-sm text-white uppercase">{metadata?.file_type || 'text'}</div>
+                        </div>
+                        <div className="bg-slate-700/50 rounded p-3">
+                          <div className="text-xs text-slate-400 mb-1">Size</div>
+                          <div className="text-sm text-white">
+                            {metadata?.size_bytes 
+                              ? `${(metadata.size_bytes / 1024).toFixed(1)} KB` 
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div className="bg-slate-700/50 rounded p-3">
+                          <div className="text-xs text-slate-400 mb-1">Status</div>
+                          <div className="flex items-center gap-2">
+                            {metadata?.is_chunked ? (
+                              <>
+                                <Package className="w-4 h-4 text-purple-400" />
+                                <span className="text-sm text-white">Chunked</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle className="w-4 h-4 text-green-400" />
+                                <span className="text-sm text-white">Vectorized</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
+              </div>
 
-                {/* Document Metadata */}
-                <div className="grid grid-cols-3 gap-4 mb-6 pb-6 border-b border-slate-700">
-                  <div className="bg-slate-900 rounded-lg p-3">
-                    <div className="text-xs text-slate-400 mb-1">Source</div>
-                    <div className="text-white font-medium">
-                      {selectedDoc.metadata?.source || 'Manual Entry'}
+              {/* Chunks Information */}
+              {(() => {
+                const metadata = typeof selectedDoc.metadata === 'string' 
+                  ? JSON.parse(selectedDoc.metadata) 
+                  : selectedDoc.metadata
+                
+                if (metadata?.is_chunked && metadata?.chunk_ids) {
+                  return (
+                    <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+                      <h4 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                        <Package className="w-5 h-5 text-purple-400" />
+                        Document Chunks ({metadata.total_chunks})
+                      </h4>
+                      <p className="text-slate-400 text-sm mb-4">
+                        This document was split into {metadata.total_chunks} chunks for efficient vectorization. Each chunk is searchable independently.
+                      </p>
+                      <div className="space-y-3">
+                        {metadata.chunk_ids.map((chunk: any, idx: number) => (
+                          <div key={idx} className="bg-slate-700/50 rounded-lg p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-white">
+                                Chunk {chunk.index + 1} of {metadata.total_chunks}
+                              </span>
+                              <span className="text-xs text-slate-500">ID: {chunk.id.substring(0, 8)}...</span>
+                            </div>
+                            <div className="text-xs text-slate-400 bg-slate-800 rounded p-2 font-mono">
+                              {chunk.preview}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-slate-900 rounded-lg p-3">
-                    <div className="text-xs text-slate-400 mb-1">Type</div>
-                    <div className="text-white font-medium">
-                      {selectedDoc.metadata?.type || selectedDoc.metadata?.filename?.split('.').pop()?.toUpperCase() || 'Text'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900 rounded-lg p-3">
-                    <div className="text-xs text-slate-400 mb-1">Size</div>
-                    <div className="text-white font-medium">
-                      {(selectedDoc.content.length / 1024).toFixed(2)} KB
-                    </div>
-                  </div>
-                </div>
+                  )
+                }
+              })()}
 
-                {/* Document Content */}
-                <div>
-                  <h4 className="text-sm font-semibold text-slate-400 uppercase mb-3">Content Preview</h4>
-                  <div className="bg-slate-900 rounded-lg p-4 max-h-96 overflow-y-auto border border-slate-700">
-                    <pre className="text-slate-300 text-sm whitespace-pre-wrap font-sans leading-relaxed">
-                      {selectedDoc.content}
-                    </pre>
-                  </div>
+              {/* Content Preview */}
+              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+                <h4 className="text-lg font-semibold text-white mb-4">Content Preview</h4>
+                <div className="bg-slate-900 rounded-lg p-4 max-h-96 overflow-y-auto">
+                  <pre className="text-sm text-slate-300 whitespace-pre-wrap font-mono">
+                    {selectedDoc.content.substring(0, 2000)}
+                    {selectedDoc.content.length > 2000 && '\n\n... (truncated)'}
+                  </pre>
                 </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <FileText className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                <p className="text-slate-400 text-lg mb-2">No document selected</p>
+                <p className="text-slate-500 text-sm">Select a document from the list to view details</p>
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-slate-700">
+              <h3 className="text-xl font-semibold text-white">Upload Document</h3>
+              <button
+                onClick={() => {
+                  setShowUploadModal(false)
+                  setSelectedFiles([])
+                  setTextContent('')
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6">
+              {/* Mode Selector */}
+              <div className="flex gap-2 mb-6">
+                <button
+                  onClick={() => setUploadMode('file')}
+                  className={`flex-1 px-4 py-3 rounded-lg flex items-center justify-center gap-2 ${
+                    uploadMode === 'file'
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  <Upload className="w-5 h-5" />
+                  Upload Files
+                </button>
+                <button
+                  onClick={() => setUploadMode('text')}
+                  className={`flex-1 px-4 py-3 rounded-lg flex items-center justify-center gap-2 ${
+                    uploadMode === 'text'
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  <Plus className="w-5 h-5" />
+                  Add Text
+                </button>
+              </div>
+
+              {/* File Upload */}
+              {uploadMode === 'file' && (
+                <div className="space-y-4">
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setIsDragging(true)
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors ${
+                      isDragging
+                        ? 'border-primary-500 bg-primary-500/10'
+                        : 'border-slate-600 hover:border-slate-500'
+                    }`}
+                  >
+                    <Upload className="w-12 h-12 text-slate-400 mx-auto mb-4" />
+                    <p className="text-white mb-2">
+                      Drag and drop files here, or click to select
+                    </p>
+                    <p className="text-sm text-slate-400 mb-4">
+                      Supports PDF, TXT, MD, CSV, JSON, XML files
+                    </p>
+                    <input
+                      type="file"
+                      multiple
+                      onChange={(e) => handleFileSelect(e.target.files)}
+                      className="hidden"
+                      id="file-upload-modal"
+                      accept=".txt,.md,.pdf,.csv,.json,.xml"
+                    />
+                    <label
+                      htmlFor="file-upload-modal"
+                      className="bg-slate-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-slate-500 inline-block"
+                    >
+                      Select Files
+                    </label>
+                  </div>
+
+                  {/* Selected Files Display */}
+                  {selectedFiles.length > 0 && (
+                    <div className="bg-slate-700 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-medium text-white">
+                          Selected Files ({selectedFiles.length})
+                        </h4>
+                        <button
+                          onClick={() => setSelectedFiles([])}
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <div className="space-y-2 mb-4">
+                        {selectedFiles.map((file, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center gap-2 text-sm bg-slate-800 rounded p-2"
+                          >
+                            <File className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                            <span className="text-white flex-1 truncate">{file.name}</span>
+                            <span className="text-slate-400 text-xs">
+                              {(file.size / 1024).toFixed(1)} KB
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => {
+                          handleUploadClick()
+                          setShowUploadModal(false)
+                        }}
+                        disabled={uploadFileMutation.isPending}
+                        className="w-full bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 disabled:bg-slate-600 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium"
+                      >
+                        {uploadFileMutation.isPending ? (
+                          <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-5 h-5" />
+                            Upload {selectedFiles.length} {selectedFiles.length === 1 ? 'File' : 'Files'}
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Text Upload */}
+              {uploadMode === 'text' && (
+                <form onSubmit={handleTextSubmit} className="space-y-4">
+                  <textarea
+                    value={textContent}
+                    onChange={(e) => setTextContent(e.target.value)}
+                    placeholder="Paste or type your document content here..."
+                    className="w-full h-96 bg-slate-700 text-white rounded-lg p-4 focus:outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!textContent.trim() || addTextMutation.isPending}
+                    className="w-full bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 disabled:bg-slate-600 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium"
+                  >
+                    {addTextMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Adding Document...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-5 h-5" />
+                        Add Document
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
