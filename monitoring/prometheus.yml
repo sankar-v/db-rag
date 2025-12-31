@@ -1,0 +1,34 @@
+# Prometheus configuration for DB-RAG monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'dbrag-production'
+    environment: 'production'
+
+# Scrape configurations
+scrape_configs:
+  # FastAPI application metrics
+  - job_name: 'dbrag-api'
+    static_configs:
+      - targets: ['api:8000']
+    metrics_path: '/metrics'
+    
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+      
+  # PostgreSQL metrics
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+      
+  # Celery worker metrics (if exposed)
+  - job_name: 'celery-workers'
+    static_configs:
+      - targets: ['worker-default:9999']  # Add Prometheus exporter to workers
+
+# Alerting rules (optional)
+rule_files:
+  # - '/etc/prometheus/alerts/*.yml'

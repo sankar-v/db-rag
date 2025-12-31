@@ -84,6 +84,84 @@ class LLMConfig:
 
 
 @dataclass
+class CacheConfig:
+    """Cache configuration (Redis)"""
+    enabled: bool = True
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: Optional[str] = None
+    
+    # Cache TTLs (seconds)
+    embedding_cache_ttl: int = 86400  # 24 hours
+    metadata_cache_ttl: int = 3600    # 1 hour
+    query_cache_ttl: int = 300        # 5 minutes
+    
+    # Cache size limits
+    max_cache_size_mb: int = 1024     # 1GB
+    
+    @classmethod
+    def from_env(cls) -> 'CacheConfig':
+        """Load cache configuration from environment variables"""
+        return cls(
+            enabled=os.getenv("CACHE_ENABLED", "true").lower() == "true",
+            redis_host=os.getenv("REDIS_HOST", "localhost"),
+            redis_port=int(os.getenv("REDIS_PORT", "6379")),
+            redis_db=int(os.getenv("REDIS_DB", "0")),
+            redis_password=os.getenv("REDIS_PASSWORD"),
+            embedding_cache_ttl=int(os.getenv("EMBEDDING_CACHE_TTL", "86400")),
+            metadata_cache_ttl=int(os.getenv("METADATA_CACHE_TTL", "3600")),
+            query_cache_ttl=int(os.getenv("QUERY_CACHE_TTL", "300")),
+            max_cache_size_mb=int(os.getenv("MAX_CACHE_SIZE_MB", "1024"))
+        )
+    
+    def get_redis_url(self) -> str:
+        """Get Redis connection URL"""
+        if self.redis_password:
+            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+@dataclass
+class CeleryConfig:
+    """Celery task queue configuration"""
+    broker_url: str = "redis://localhost:6379/0"
+    result_backend: str = "redis://localhost:6379/1"
+    task_serializer: str = "json"
+    result_serializer: str = "json"
+    accept_content: list = None
+    timezone: str = "UTC"
+    enable_utc: bool = True
+    worker_concurrency: int = 4
+    task_acks_late: bool = True
+    task_reject_on_worker_lost: bool = True
+    
+    def __post_init__(self):
+        if self.accept_content is None:
+            self.accept_content = ['json']
+    
+    @classmethod
+    def from_env(cls) -> 'CeleryConfig':
+        """Load Celery configuration from environment variables"""
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = os.getenv("REDIS_PORT", "6379")
+        redis_password = os.getenv("REDIS_PASSWORD")
+        
+        if redis_password:
+            broker_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/0"
+            result_backend = f"redis://:{redis_password}@{redis_host}:{redis_port}/1"
+        else:
+            broker_url = f"redis://{redis_host}:{redis_port}/0"
+            result_backend = f"redis://{redis_host}:{redis_port}/1"
+        
+        return cls(
+            broker_url=broker_url,
+            result_backend=result_backend,
+            worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", "4")),
+        )
+
+
+@dataclass
 class RAGConfig:
     """RAG-specific configuration"""
     enable_vector_search: bool = True
@@ -95,6 +173,13 @@ class RAGConfig:
     enable_query_validation: bool = True
     enable_auto_metadata_sync: bool = True
     
+    # Async processing
+    async_document_processing: bool = True
+    async_metadata_updates: bool = True
+    
+    # Batch processing
+    embedding_batch_size: int = 100
+    
     @classmethod
     def from_env(cls) -> 'RAGConfig':
         """Load RAG configuration from environment variables"""
@@ -102,7 +187,10 @@ class RAGConfig:
             enable_vector_search=os.getenv("ENABLE_VECTOR_SEARCH", "true").lower() == "true",
             enable_sql_search=os.getenv("ENABLE_SQL_SEARCH", "true").lower() == "true",
             max_context_tables=int(os.getenv("MAX_CONTEXT_TABLES", "5")),
-            max_vector_results=int(os.getenv("MAX_VECTOR_RESULTS", "3"))
+            max_vector_results=int(os.getenv("MAX_VECTOR_RESULTS", "3")),
+            async_document_processing=os.getenv("ASYNC_DOCUMENT_PROCESSING", "true").lower() == "true",
+            async_metadata_updates=os.getenv("ASYNC_METADATA_UPDATES", "true").lower() == "true",
+            embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
         )
 
 
@@ -111,8 +199,11 @@ class Config:
     
     def __init__(self):
         self.database = DatabaseConfig.from_env()
+        self.metadata_db = MetadataDatabaseConfig.from_env()
         self.llm = LLMConfig.from_env()
         self.rag = RAGConfig.from_env()
+        self.cache = CacheConfig.from_env()
+        self.celery = CeleryConfig.from_env()
     
     @classmethod
     def load(cls) -> 'Config':

@@ -16,7 +16,17 @@ from config import Config, MetadataDatabaseConfig
 from connection_manager import ConnectionManager
 from database import DatabaseManager
 from metadata_database import MetadataDatabaseManager
+from api_jobs import router as jobs_router
 import os
+
+# Import tasks for async processing
+try:
+    from tasks import ingest_document_task, update_table_metadata_task, batch_update_metadata_task
+    ASYNC_ENABLED = True
+    logger.info("Async task processing enabled (Celery)")
+except ImportError:
+    ASYNC_ENABLED = False
+    logger.warning("Celery not available, async processing disabled")
 
 # Load environment
 load_dotenv()
@@ -43,6 +53,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include job management router
+app.include_router(jobs_router)
 
 # Global DB-RAG instance, connection manager, and metadata database
 rag_instance: Optional[DBRAG] = None
@@ -508,12 +521,23 @@ async def add_document(request: DocumentRequest):
 
 
 @app.post("/api/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
-    """Upload and process a document file"""
+async def upload_document(file: UploadFile = File(...), async_processing: bool = False):
+    """
+    Upload and process a document file
+    
+    Args:
+        file: The document file to upload
+        async_processing: If True, process document in background (requires Celery)
+    """
     global rag_instance
     
     if not rag_instance:
         raise HTTPException(status_code=503, detail="DB-RAG system not initialized")
+    
+    # If async requested but not available, fall back to sync
+    if async_processing and not ASYNC_ENABLED:
+        logger.warning("Async processing requested but not available, falling back to sync")
+        async_processing = False
     
     try:
         # Read file content
@@ -573,6 +597,33 @@ async def upload_document(file: UploadFile = File(...)):
                     detail=f"Unsupported file type: .{file_ext}. Supported formats: PDF, TXT, MD, CSV, JSON, XML"
                 )
         
+        # Prepare metadata
+        metadata = {
+            "filename": filename,
+            "content_type": file.content_type,
+            "file_type": file_ext,
+            "source": "upload",
+            "size_bytes": len(content)
+        }
+        
+        # Use async processing if requested
+        if async_processing:
+            logger.info(f"Submitting document '{filename}' for async processing")
+            task = ingest_document_task.delay(
+                content=text_content,
+                metadata=metadata,
+                chunk_size=1000,
+                chunk_overlap=200
+            )
+            
+            return {
+                "success": True,
+                "job_id": task.id,
+                "message": f"Document '{filename}' submitted for background processing",
+                "status_url": f"/api/jobs/{task.id}"
+            }
+        
+        # Sync processing (original behavior)
         # Chunk large documents to handle token limits
         # OpenAI's text-embedding-ada-002 has 8191 token limit
         # Approximate: 1 token ~= 4 characters, so chunk at ~24,000 chars to be safe

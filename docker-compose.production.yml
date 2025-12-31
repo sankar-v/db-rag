@@ -1,0 +1,330 @@
+# Docker Compose for Self-Managed DB-RAG Production Setup
+# Includes: API, Workers, Redis, PostgreSQL with pgvector, Monitoring
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dbrag-postgres
+    environment:
+      POSTGRES_DB: dbrag
+      POSTGRES_USER: dbrag_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      # Performance tuning
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_MAX_CONNECTIONS: 200
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbrag_user -d dbrag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dbrag-network
+
+  # Redis for caching and message queue
+  redis:
+    image: redis:7-alpine
+    container_name: dbrag-redis
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dbrag-network
+
+  # FastAPI application server
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.app
+    container_name: dbrag-api
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --workers 4
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: dbrag
+      DB_USER: dbrag_user
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: text-embedding-3-small
+      
+      # Redis/Cache
+      CACHE_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      
+      # Async processing
+      ASYNC_DOCUMENT_PROCESSING: "true"
+      ASYNC_METADATA_UPDATES: "true"
+      
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Celery worker (default queue)
+  worker-default:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.app
+    container_name: dbrag-worker-default
+    command: celery -A celeryconfig worker --loglevel=info --concurrency=4 --queues=default --max-tasks-per-child=100
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: dbrag
+      DB_USER: dbrag_user
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: text-embedding-3-small
+      
+      # Redis/Cache
+      CACHE_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      CELERY_WORKER_CONCURRENCY: 4
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2  # Run 2 workers for default queue
+
+  # Celery worker (low priority queue for maintenance)
+  worker-low:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.app
+    container_name: dbrag-worker-low
+    command: celery -A celeryconfig worker --loglevel=info --concurrency=2 --queues=low --max-tasks-per-child=50
+    environment:
+      # Same environment as worker-default
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: dbrag
+      DB_USER: dbrag_user
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: text-embedding-3-small
+      CACHE_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      CELERY_WORKER_CONCURRENCY: 2
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Celery Beat (periodic tasks scheduler)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.app
+    container_name: dbrag-celery-beat
+    command: celery -A celeryconfig beat --loglevel=info
+    environment:
+      # Same environment as workers
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: dbrag
+      DB_USER: dbrag_user
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Frontend (React + Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dbrag-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Flower (Celery monitoring UI)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.app
+    container_name: dbrag-flower
+    command: celery -A celeryconfig flower --port=5555
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Prometheus (metrics collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dbrag-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Grafana (metrics visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dbrag-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: redis-datasource
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Redis Exporter (for Prometheus)
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: dbrag-redis-exporter
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+  # Postgres Exporter (for Prometheus)
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: dbrag-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: postgresql://dbrag_user:${DB_PASSWORD:-changeme}@postgres:5432/dbrag?sslmode=disable
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dbrag-network
+    restart: unless-stopped
+
+networks:
+  dbrag-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
