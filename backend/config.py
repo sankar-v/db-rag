@@ -136,9 +136,21 @@ class CeleryConfig:
     task_acks_late: bool = True
     task_reject_on_worker_lost: bool = True
     
+    # Result backend configuration
+    result_backend_type: str = "redis"  # redis, postgres, or hybrid
+    result_expires: int = 86400  # 24 hours (0 = never expire for postgres)
+    
+    # PostgreSQL result backend (enterprise)
+    database_table_names: dict = None
+    
     def __post_init__(self):
         if self.accept_content is None:
             self.accept_content = ['json']
+        if self.database_table_names is None:
+            self.database_table_names = {
+                'task': 'celery_taskmeta',
+                'group': 'celery_groupmeta',
+            }
     
     @classmethod
     def from_env(cls) -> 'CeleryConfig':
@@ -147,16 +159,52 @@ class CeleryConfig:
         redis_port = os.getenv("REDIS_PORT", "6379")
         redis_password = os.getenv("REDIS_PASSWORD")
         
-        if redis_password:
-            broker_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/0"
-            result_backend = f"redis://:{redis_password}@{redis_host}:{redis_port}/1"
+        # Broker URL (always Redis or RabbitMQ)
+        broker_type = os.getenv("CELERY_BROKER", "redis")  # redis or rabbitmq
+        
+        if broker_type == "rabbitmq":
+            rabbitmq_host = os.getenv("RABBITMQ_HOST", "localhost")
+            rabbitmq_port = os.getenv("RABBITMQ_PORT", "5672")
+            rabbitmq_user = os.getenv("RABBITMQ_USER", "guest")
+            rabbitmq_password = os.getenv("RABBITMQ_PASSWORD", "guest")
+            rabbitmq_vhost = os.getenv("RABBITMQ_VHOST", "/")
+            broker_url = f"amqp://{rabbitmq_user}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}/{rabbitmq_vhost}"
         else:
-            broker_url = f"redis://{redis_host}:{redis_port}/0"
+            if redis_password:
+                broker_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/0"
+            else:
+                broker_url = f"redis://{redis_host}:{redis_port}/0"
+        
+        # Result backend (Redis, PostgreSQL, or Hybrid)
+        result_backend_type = os.getenv("CELERY_RESULT_BACKEND", "redis")  # redis, postgres, hybrid
+        
+        if result_backend_type == "postgres":
+            # Use PostgreSQL for persistent result storage
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = os.getenv("DB_PORT", "5432")
+            db_name = os.getenv("DB_NAME", "dbrag")
+            db_user = os.getenv("DB_USER", "dbrag_user")
+            db_password = os.getenv("DB_PASSWORD", "")
+            result_backend = f"db+postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+            result_expires = 0  # Never expire with PostgreSQL
+        elif result_backend_type == "hybrid":
+            # Hybrid: Redis for speed, PostgreSQL for persistence
+            # Store in both, query from Redis first
             result_backend = f"redis://{redis_host}:{redis_port}/1"
+            result_expires = 3600  # 1 hour in Redis, archive to PostgreSQL
+        else:
+            # Default: Redis only
+            if redis_password:
+                result_backend = f"redis://:{redis_password}@{redis_host}:{redis_port}/1"
+            else:
+                result_backend = f"redis://{redis_host}:{redis_port}/1"
+            result_expires = int(os.getenv("CELERY_RESULT_EXPIRES", "3600"))  # 1 hour default
         
         return cls(
             broker_url=broker_url,
             result_backend=result_backend,
+            result_backend_type=result_backend_type,
+            result_expires=result_expires,
             worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", "4")),
         )
 

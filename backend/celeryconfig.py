@@ -22,6 +22,17 @@ celery_app.conf.update(
     task_acks_late=config.celery.task_acks_late,
     task_reject_on_worker_lost=config.celery.task_reject_on_worker_lost,
     
+    # Result backend configuration
+    result_expires=config.celery.result_expires,
+    result_extended=True,  # Store more metadata
+    result_backend_transport_options={
+        'master_name': 'mymaster',  # For Redis Sentinel
+    },
+    
+    # PostgreSQL result backend settings (if using postgres)
+    database_table_names=config.celery.database_table_names,
+    database_short_lived_sessions=True,  # Better for PostgreSQL
+    
     # Task routing (priority queues)
     task_routes={
         'tasks.ingest_document_task': {'queue': 'default'},
